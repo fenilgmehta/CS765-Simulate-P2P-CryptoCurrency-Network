@@ -23,6 +23,7 @@
                 - `dij` is randomly chosen from an exponential distribution with some mean `96kbits/ci,j`
     - Probability of invalid transaction generation
     - GenesisBlock
+        - Initial coins owned by each Peer
 
 - Peers Info
     - PeerId
@@ -95,6 +96,10 @@
     - dictionary {block_hash: block_object, receive time}
 
 
+- Mining
+    - Continue mining on the longest chain received first
+        - Example: if current longest (A) is 5 and I receive a block which create another chain (B) of length 5; then I continue mining on "A" instead of randomly selecting one of "A" or "B"
+    - Continue the mining (i.e. execute the mining event) if block received is old (i.e. not of longest length)
+        - Example: if my current longest chain is of length 10 and I receive a block with chain length 8; then I continue my mining on the chain of length 10
+    - If my current longest chain (A) is 15 and I receive a block with chain length 20 (B), then I will have to add all the transaction which are processed in A and not in B to my transaction pool
 
-### TODO
-- how to verify a mining fee transaction
