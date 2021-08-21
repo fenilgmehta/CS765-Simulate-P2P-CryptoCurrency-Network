@@ -1,0 +1,5 @@
+{
+    "total-nodes" : 10,
+    "slow-nodes" : 20,
+    "txn-interarrival-mean" : 4
+}
