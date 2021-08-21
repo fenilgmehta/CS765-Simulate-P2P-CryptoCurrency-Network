@@ -1,5 +1,8 @@
 {
-    "total-nodes" : 10,
-    "slow-nodes-percent" : 20,
-    "txn-interarrival-mean" : 4
+    "total_nodes" : 10,
+    "slow_nodes_percent" : 20,
+    "txn_interarrival_mean" : 4,
+    "node_initial_coins_low" : 10,
+    "node_initial_coins_high" : 200,
+    "max_transactions_per_block": 1000
 }
