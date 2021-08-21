@@ -11,9 +11,19 @@
 	- 20305R005 - Arnab Das
 
 
+### Points to Note
+- `Node == Peer` in our code
+- `f-strings` feature of Python is used
+- `md5` hash function is used for speed
+  	- Can be updated to use any other hash function
+
 ### Execution Steps
 - to add
 
 
 ### References
-- to add
+- https://treelib.readthedocs.io/en/latest/
+- https://graphviz.org/Gallery/directed/fsm.html
+- [Bitcoin and cryptocurrency mining explained](https://www.youtube.com/watch?v=kZXXDp0_R-w)
+- [Proof-of-Stake (vs proof-of-work)](https://www.youtube.com/watch?v=M3EFi_POhps)
+- [But how does bitcoin actually work?](https://www.youtube.com/watch?v=bBC-nXj3Ng4)
