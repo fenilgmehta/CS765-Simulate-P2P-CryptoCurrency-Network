@@ -2,6 +2,7 @@
 import enum
 import json
 import hashlib
+import os
 import sys
 import math
 import random
@@ -18,6 +19,9 @@ g_logger = None
 class SimulatorParameters:
     # Parameters in the configuration file (will be read from the file during initialization)
     def __init__(self) -> None:
+        self.output_path: str = ''
+        self.execution_time: float = 0.0
+
         # Point 1 of PDF: Total Nodes present in the P2P cryptocurrency network
         self.n_total_nodes: int = 0
         # Point 1 of PDF: z% of nodes are slow
@@ -46,6 +50,10 @@ class SimulatorParameters:
         parameters = json.load(config_file)
 
         # Read parameters from the config file
+        self.output_path: str = os.path.abspath(parameters['output_path'])
+        os.makedirs(self.output_path, exist_ok=True)
+        self.execution_time: float = float(parameters['execution_time'])
+
         self.n_total_nodes: int = int(parameters['n_total_nodes'])
         self.z_percent_slow_nodes: float = float(parameters['z_percent_slow_nodes'])
 
@@ -110,7 +118,7 @@ class Simulator:
         list_slow_fast: List[bool] = ([False] * self.simulator_parameters.number_of_slow_nodes) \
                                      + ([True] * self.simulator_parameters.number_of_fast_nodes)
         # Create the nodes
-        self.nodes_list = [Node(self, self.simulator_parameters, i) for i in list_slow_fast]
+        self.nodes_list = [Node(i, self, self.simulator_parameters, i_val) for i, i_val in enumerate(list_slow_fast)]
         # TODO: Implement point 4 of the problem statement
         #       i.e. Create a connected graph
         pass
@@ -141,8 +149,32 @@ class Simulator:
         transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(node_idx, money)]
         return Block('', 0, 0, transactions, 0)
 
+    def execute_next_event(self):
+        # TODO
+        pass
+
     def get_global_time(self):
         return self.global_time
+
+    def write_all_node_tree_to_file(self):
+        for node in self.nodes_list:
+            self.write_node_tree_to_file(
+                node_obj=node,
+                file_name=f'{self.simulator_parameters.output_path}/tree_{node.node_id}'
+            )
+        pass
+
+    def write_node_tree_to_file(self, node_obj: 'Node', file_name: str):
+        global g_logger
+        temp_name = file_name
+        i = 0
+        while os.path.exists(temp_name):
+            g_logger.error(f'File already exists: "{file_name}"')
+            temp_name = file_name + f'_({str(i):03d}).txt'
+            return
+        with open(temp_name, 'w+') as f:
+            f.write(node_obj.serialize_blockchain_to_str_v1())
+        pass
 
 
 class Transaction:
@@ -203,6 +235,10 @@ class Block:
         """
         return str([self.prev_block_hash, self.creation_time, self.index, self.transactions])
 
+    def serialize(self) -> str:
+        return str([self.curr_block_hash, self.recv_time, self.prev_block_hash, self.creation_time, self.index,
+                    self.transactions])
+
     def size(self) -> int:
         # REFER: https://stackoverflow.com/questions/14329794/get-size-in-bytes-needed-for-an-integer-in-python
         # In real life
@@ -217,12 +253,13 @@ class Block:
 class Node:
     """Structure of a node on the P2P network"""
 
-    def __init__(self, simulator: Simulator, sp: SimulatorParameters, is_network_fast: bool):
+    def __init__(self, node_id: int, simulator: Simulator, sp: SimulatorParameters, is_network_fast: bool):
+        self.node_id = node_id
         self.simulator: Simulator = simulator
         self.is_network_fast = is_network_fast
 
-        # List of connected peers
-        self.neighbors: List[Node.NodeSiblingInfo] = []
+        # Dictionary of connected peers
+        self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
         # The time at which a new block with chain lenght > local chain length is received
         self.last_receive_time: int = -1
 
@@ -252,14 +289,13 @@ class Node:
         Adding new peer to the neighbors list
         Inserts an edge between this and new_peer in the node graph
         """
-        self.neighbors.append(Node.NodeSiblingInfo(new_peer_id, rho_ij, c_ij))
+        self.neighbors[new_peer_id] = Node.NodeSiblingInfo(new_peer_id, rho_ij, c_ij)
 
     def remove_peer(self, peer_id: int) -> bool:
-        for i in range(len(self.neighbors)):
-            if self.neighbors[i].node_id == peer_id:
-                self.neighbors.pop(i)
-                return True
-        return False
+        if peer_id not in self.neighbors.keys():
+            return False
+        self.neighbors.pop(peer_id)
+        return True
 
     # REFER: https://www.geeksforgeeks.org/inner-class-in-python/
     class NodeSiblingInfo:
@@ -296,8 +332,9 @@ class Node:
         # IF transaction is invalid; then I drop it
         if self.transaction_validate(transaction_obj) == False:
             return
+        # Store the block and forward it to others
         self.txn_all[transaction_obj.txn_hash] = transaction_obj
-        for node in self.neighbors:
+        for node in self.neighbors.values():
             # Do NOT send the transaction back to the node from which it was received
             if node.node_id == senders_id:
                 continue
@@ -309,19 +346,24 @@ class Node:
         pass
 
     def block_send(self, block_obj: Block, receivers_id: int):
-        # TODO
-        pass
+        self.simulator.event_queue.push(
+            Event(self.simulator.get_global_time(), EventType.EVENT_RECV_BLOCK, block_obj)
+        )
 
     def block_recv(self, block_obj: Block, senders_id: int, current_time: float):
+        # set the block receive time
         block_obj.recv_time = current_time
+
         # IF I have already received the block; THEN I drop it
         if block_obj.curr_block_hash in self.blocks_all:
             return
         # IF block is invalid; then I drop it
         if self.block_validate(block_obj) == False:
             return
+        # Store the block and forward it to others
         self.blocks_all[block_obj.curr_block_hash] = block_obj
-        for node in self.neighbors:
+        for node in self.neighbors.values():
+            # Do NOT send the block back to the node from which it was received
             if node.node_id == senders_id:
                 continue
             self.block_send(block_obj, node.node_id)
@@ -331,6 +373,10 @@ class Node:
     def broadcast(self, obj_to_broadcast):
         # TODO
         pass
+
+    def serialize_blockchain_to_str_v1(self) -> str:
+        # TODO: update this if required
+        return '\n'.join([block.serialize() for block in self.blocks_all.values()])
 
 
 # REFER: https://www.tutorialspoint.com/enum-in-python
@@ -363,12 +409,14 @@ class EventQueue:
 
 
 def Main(args: Dict):
-    ss = SimulatorParameters()
-    ss.load_from_file(args['config'])
-    ss.log_parameters()
-    mySimulator = Simulator(ss)
+    sp = SimulatorParameters()
+    sp.load_from_file(args['config'])
+    sp.log_parameters()
+    mySimulator = Simulator(sp)
     mySimulator.initialize()
-    pass
+    while mySimulator.get_global_time() < sp.execution_time:
+        mySimulator.execute_next_event()
+    mySimulator.write_all_node_tree_to_file()
 
 
 if __name__ == '__main__':

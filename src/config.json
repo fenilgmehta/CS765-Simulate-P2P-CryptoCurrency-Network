@@ -1,4 +1,6 @@
 {
+  "output_path": "./blockchains/",
+  "execution_time": "1000",
   "n_total_nodes": 20,
   "z_percent_slow_nodes": 40,
   "T_tx_exp_txn_interarrival_mean_sec": 4,
