@@ -12,13 +12,16 @@
 
 
 ### Points to Note
-- `Node == Peer` in our code
+- `Node == Peer == Miner` all three mean the same
 - `f-strings` feature of Python is used
 - `md5` hash function is used for speed
   	- Can be updated to use any other hash function
 
 ### Execution Steps
-- to add
+```shell
+cd src
+python simulator.py --config config.json --debug
+```
 
 
 ### References
@@ -27,3 +30,6 @@
 - [Bitcoin and cryptocurrency mining explained](https://www.youtube.com/watch?v=kZXXDp0_R-w)
 - [Proof-of-Stake (vs proof-of-work)](https://www.youtube.com/watch?v=M3EFi_POhps)
 - [But how does bitcoin actually work?](https://www.youtube.com/watch?v=bBC-nXj3Ng4)
+- [https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4](Static Typing in Python)
+- [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
+	- KiloByte (kB) vs. KibiByte (KiB)
