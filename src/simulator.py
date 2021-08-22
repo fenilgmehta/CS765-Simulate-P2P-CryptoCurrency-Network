@@ -106,7 +106,6 @@ class SimulatorParameters:
 
 class Simulator:
     def __init__(self, sp: SimulatorParameters):
-        # TODO
         self.simulator_parameters: SimulatorParameters = sp
         self.global_time: float = 0.0
         self.nodes_list: List[Node] = list()
@@ -147,11 +146,31 @@ class Simulator:
         )
         # Sender = -1 denotes that coins are created from thin air in the genesis block
         transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(recv_node_idx, money)]
-        return Block('-1', -1, 0, transactions, 0)
+        return Block('-1', -1.0, 0, transactions, 0)
 
     def execute_next_event(self):
-        # TODO
-        pass
+        """This will execute all events with event_completion_time==queue.top().event_completion_time"""
+        global g_logger
+        event: Event = self.event_queue.pop()
+        if event == False:
+            return False
+        self.global_time = event.event_completion_time
+        while True:
+            if event.event_type == EventType.EVENT_RECV_TRANSACTION:
+                txn: Transaction = event.data_obj
+                self.nodes_list[event.event_receiver_id].transaction_recv(txn, event.event_creator_id)
+            elif event.event_type == EventType.EVENT_RECV_BLOCK:
+                blk: Block = event.data_obj
+                self.nodes_list[event.event_receiver_id].block_recv(blk, event.event_creator_id, self.global_time)
+            elif event.event_type == EventType.EVENT_BLOCK_CREATE_SUCCESS:
+                blk: Block = event.data_obj
+                self.nodes_list[event.event_receiver_id].mining_complete(blk)
+            else:
+                g_logger.warning(f'Unexpected EventType={event.event_type} , {event=}')
+            if self.event_queue.top() == False or self.event_queue.top().event_completion_time > self.global_time:
+                break
+            event = self.event_queue.pop()
+        return True
 
     def get_global_time(self):
         return self.global_time
@@ -202,7 +221,7 @@ class Transaction:
 
 class Block:
     def __init__(self, prev_block_hash: str, creation_time: float, index: int, transactions: List[Transaction],
-                 recv_time: int):
+                 recv_time: float):
         """self.index is 0-indexed"""
         self.prev_block_hash: str = prev_block_hash
         self.creation_time: float = creation_time
@@ -211,10 +230,10 @@ class Block:
 
         # This value/variable is NOT used during hash calculation of this block
         self.curr_block_hash: str = self.get_hash()
-        self.recv_time: int = recv_time
+        self.recv_time: float = recv_time
 
     def update(self, prev_block_hash: str, creation_time: float, index: int, transactions: List[Transaction],
-               recv_time: int):
+               recv_time: float):
         self.prev_block_hash = prev_block_hash
         self.creation_time = creation_time
         self.index = index
@@ -330,14 +349,29 @@ class Node:
         self.txn_pool = list(txn_pool_temp)
 
     def is_transaction_validate(self, transaction_obj):
-        # TODO
-        pass
+        global g_logger
+        senders_balance = 0.0
+        curr_blockchain_hash = self.block_chain_leafs[-1]
+        while curr_blockchain_hash != self.GENESIS_BLOCK.prev_block_hash:
+            for txn in self.blocks_all[curr_blockchain_hash].transactions:
+                if transaction_obj.id_sender == txn.id_sender:
+                    senders_balance -= txn.coin_amount
+                elif transaction_obj.id_sender == txn.id_receiver:
+                    senders_balance += txn.coin_amount
+                if senders_balance < 0.0:
+                    g_logger.error(f'The blockchain has -ve balance for {transaction_obj.id_sender=}')
+                    g_logger.error(f'Blockchain tail = {self.block_chain_leafs[-1]}')
+                    # TODO: do more verbose logging
+            curr_blockchain_hash = self.blocks_all[curr_blockchain_hash].prev_block_hash
+        return senders_balance >= transaction_obj.coin_amount
 
     def transaction_send(self, transaction_obj: Transaction, receivers_id: int):
         self.simulator.event_queue.push(
             Event(
                 self.simulator.get_global_time() + numpy.random.exponential(1),  # TODO
                 EventType.EVENT_RECV_TRANSACTION,
+                self.node_id,
+                receivers_id,
                 transaction_obj
             )
         )
@@ -358,19 +392,35 @@ class Node:
             self.transaction_send(transaction_obj, node.node_id)
         pass
 
-    def is_block_validate(self, block_obj):
-        # TODO
-        pass
+    def is_block_validate(self, block_obj: Block):
+        """NOTE: first transaction of all blocks SHOULD ONLY be mining reward transaction"""
+        global g_logger
+        if len(block_obj.transactions) <= 1:
+            return False
+        if block_obj.prev_block_hash not in self.blocks_all:
+            g_logger.warning(f'Block received whose parent is not yet received to this Node')
+            g_logger.warning(f'{self.node_id=} , {block_obj=}')
+        if self.blocks_all[block_obj.prev_block_hash].index + 1 != block_obj.index:
+            return False
+        for txn in block_obj.transactions[1:]:
+            if self.is_transaction_validate(txn):
+                continue
+            return False
+        return True
 
     def block_send(self, block_obj: Block, receivers_id: int):
         self.simulator.event_queue.push(
             Event(
                 self.simulator.get_global_time() + numpy.random.exponential(1),  # TODO
                 EventType.EVENT_RECV_BLOCK,
-                block_obj)
+                self.node_id,
+                receivers_id,
+                block_obj
+            )
         )
 
     def block_recv(self, block_obj: Block, senders_id: int, current_time: float):
+        global g_logger
         # set the block receive time
         block_obj.recv_time = current_time
 
@@ -414,10 +464,6 @@ class Node:
             self.mining_start()
         pass
 
-    def broadcast(self, obj_to_broadcast):
-        # TODO
-        pass
-
     def get_new_transaction_greedy(self) -> List[Transaction]:
         if len(self.txn_pool) <= self.max_transactions_per_block - 1:
             return copy.deepcopy(self.txn_pool)
@@ -443,14 +489,37 @@ class Node:
             Event(
                 new_block.creation_time,
                 EventType.EVENT_BLOCK_CREATE_SUCCESS,
+                self.node_id,
+                self.node_id,
                 new_block
             )
         )
         return True
 
-    def mining_complete(self):
-        # TODO
+    def mining_complete(self, block: Block):
+        global g_logger
+        # A "Block" which created new longest blockchain was received after the
+        # mining started. Hence, we discard this mining complete request because
+        # in real life this mining work is to be discarded.
+        if block.creation_time < self.last_receive_time:
+            return
+        if self.blocks_all[self.block_chain_leafs[-1]].index > block.index:
+            g_logger.warning(
+                f'Block mining complete but a chain with longer length is present in "self.block_chain_leafs"'
+            )
+            g_logger.warning(f'len queue = {self.blocks_all[self.block_chain_leafs[-1]].index=}')
+            g_logger.warning(f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
+        if self.block_chain_leafs[-1] != block.prev_block_hash:
+            g_logger.warning(f'len queue = {self.blocks_all[self.block_chain_leafs[-1]].index=}')
+            g_logger.warning(f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
 
+        # Add block to the blockchain
+        self.blocks_all[block.curr_block_hash] = block
+        self.block_chain_leafs[-1] = block.curr_block_hash
+
+        # Broadcast the "block" to all "self.neighbors"
+        for node in self.neighbors.values():
+            self.block_send(block, node.node_id)
         pass
 
     def serialize_blockchain_to_str_v1(self) -> str:
@@ -462,17 +531,26 @@ class Node:
 class EventType(enum.Enum):
     EVENT_UNDEFINED = 0
     EVENT_SEND_TRANSACTION = 1
-    EVENT_RECV_TRANSACTION = 2
+    EVENT_RECV_TRANSACTION = 2  # Queue -> transaction_obj: Transaction
     EVENT_SEND_BLOCK = 3
-    EVENT_RECV_BLOCK = 4
+    EVENT_RECV_BLOCK = 4  # Queue -> block_obj: Block
     EVENT_BLOCK_CREATE = 5
     EVENT_BLOCK_CREATE_SUCCESS = 6  # Queue -> data_obj: Block
 
 
 class Event:
-    def __init__(self, event_completion_time: float, event_type: EventType, data_obj):
-        self.event_completion_time: float = 0.0
-        self.event_type: EventType = EventType.EVENT_UNDEFINED
+    def __init__(
+            self,
+            event_completion_time: float,
+            event_type: EventType,
+            event_creator_id: int,
+            event_receiver_id: int,
+            data_obj: Union[Transaction, Block]
+    ):
+        self.event_completion_time: float = event_completion_time
+        self.event_type: EventType = event_type
+        self.event_creator_id: int = event_creator_id
+        self.event_receiver_id: int = event_receiver_id
         self.data_obj = data_obj
 
 
@@ -488,15 +566,24 @@ class EventQueue:
     def pop(self) -> Event:
         return heapq.heappop(self.events)[1]
 
+    def top(self) -> Union[Event, bool]:
+        if len(self.events) == 0:
+            return False
+        return self.events[0][1]
+
 
 def Main(args: Dict):
+    global g_logger
     sp = SimulatorParameters()
     sp.load_from_file(args['config'])
     sp.log_parameters()
     mySimulator = Simulator(sp)
     mySimulator.initialize()
     while mySimulator.get_global_time() < sp.execution_time:
-        mySimulator.execute_next_event()
+        status = mySimulator.execute_next_event()
+        if status == False:
+            g_logger.info('No events present in the event queue. Exiting...')
+            break
     mySimulator.write_all_node_tree_to_file()
 
 
