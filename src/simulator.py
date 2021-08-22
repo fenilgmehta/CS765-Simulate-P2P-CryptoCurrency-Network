@@ -11,7 +11,7 @@ import logging
 import numpy
 import copy
 import heapq
-from typing import List, Dict, Union, Tuple
+from typing import List, Dict, Union, Tuple, Set
 
 g_logger = None
 
@@ -118,7 +118,7 @@ class Simulator:
         list_slow_fast: List[bool] = ([False] * self.simulator_parameters.number_of_slow_nodes) \
                                      + ([True] * self.simulator_parameters.number_of_fast_nodes)
         # Create the nodes
-        self.nodes_list = [Node(i, self, self.simulator_parameters, i_val) for i, i_val in enumerate(list_slow_fast)]
+        self.nodes_list = [Node(i, self, GENESIS_BLOCK, i_val) for i, i_val in enumerate(list_slow_fast)]
         # TODO: Implement point 4 of the problem statement
         #       i.e. Create a connected graph
         pass
@@ -140,14 +140,14 @@ class Simulator:
             min_of_block_limit_and_nodes
         )
         # Uniform random distribution to nodes
-        node_idx = numpy.random.randint(
+        recv_node_idx = numpy.random.randint(
             0,
             self.simulator_parameters.n_total_nodes,
             min_of_block_limit_and_nodes
         )
         # Sender = -1 denotes that coins are created from thin air in the genesis block
-        transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(node_idx, money)]
-        return Block('', 0, 0, transactions, 0)
+        transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(recv_node_idx, money)]
+        return Block('-1', -1, 0, transactions, 0)
 
     def execute_next_event(self):
         # TODO
@@ -253,7 +253,8 @@ class Block:
 class Node:
     """Structure of a node on the P2P network"""
 
-    def __init__(self, node_id: int, simulator: Simulator, sp: SimulatorParameters, is_network_fast: bool):
+    def __init__(self, node_id: int, simulator: Simulator, GENESIS_BLOCK: Block, is_network_fast: bool):
+        sp: SimulatorParameters = simulator.simulator_parameters
         self.node_id = node_id
         self.simulator: Simulator = simulator
         self.is_network_fast = is_network_fast
@@ -266,8 +267,9 @@ class Node:
         self.txn_all: Dict[str, Transaction] = dict()
         self.txn_pool: List[Transaction] = list()
 
-        self.blocks_all: Dict[str, Block] = dict()
-        self.block_chain_leafs: List[str] = list()
+        self.GENESIS_BLOCK = GENESIS_BLOCK
+        self.blocks_all: Dict[str, Block] = {GENESIS_BLOCK.curr_block_hash: GENESIS_BLOCK}
+        self.block_chain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         # Point 7 of PDF: Exponential Distribution Mean for the
         # block mining time by node. It is randomly generated
@@ -316,13 +318,28 @@ class Node:
             d_ij = numpy.random.exponential(96_000 / self.c_ij)  # TODO
             return self.rho_ij + (message_size_bits / self.c_ij) + d_ij
 
-    def transaction_validate(self, transaction_obj):
+    def change_mining_branch(self, block_tail_hash_curr: str, block_tail_hash_new: str):
+        # NOTE: this can be optimized by finding the common ancestor of the
+        #       "current tail" on which mining is being done and the "new tail"
+        txn_pool_temp: Set[Transaction] = set(self.txn_all.values())
+        curr_block_hash: str = self.block_chain_leafs[-1]
+        while curr_block_hash != self.GENESIS_BLOCK.curr_block_hash:
+            for txn in self.blocks_all[curr_block_hash].transactions:
+                txn_pool_temp.remove(txn)
+            curr_block_hash = self.blocks_all[curr_block_hash].prev_block_hash
+        self.txn_pool = list(txn_pool_temp)
+
+    def is_transaction_validate(self, transaction_obj):
         # TODO
         pass
 
     def transaction_send(self, transaction_obj: Transaction, receivers_id: int):
         self.simulator.event_queue.push(
-            Event(self.simulator.get_global_time(), EventType.EVENT_RECV_TRANSACTION, transaction_obj)
+            Event(
+                self.simulator.get_global_time() + numpy.random.exponential(1),  # TODO
+                EventType.EVENT_RECV_TRANSACTION,
+                transaction_obj
+            )
         )
 
     def transaction_recv(self, transaction_obj: Transaction, senders_id: int):
@@ -330,7 +347,7 @@ class Node:
         if transaction_obj.txn_hash in self.txn_all:
             return
         # IF transaction is invalid; then I drop it
-        if self.transaction_validate(transaction_obj) == False:
+        if self.is_transaction_validate(transaction_obj) == False:
             return
         # Store the block and forward it to others
         self.txn_all[transaction_obj.txn_hash] = transaction_obj
@@ -341,13 +358,16 @@ class Node:
             self.transaction_send(transaction_obj, node.node_id)
         pass
 
-    def block_validate(self, block_obj):
+    def is_block_validate(self, block_obj):
         # TODO
         pass
 
     def block_send(self, block_obj: Block, receivers_id: int):
         self.simulator.event_queue.push(
-            Event(self.simulator.get_global_time(), EventType.EVENT_RECV_BLOCK, block_obj)
+            Event(
+                self.simulator.get_global_time() + numpy.random.exponential(1),  # TODO
+                EventType.EVENT_RECV_BLOCK,
+                block_obj)
         )
 
     def block_recv(self, block_obj: Block, senders_id: int, current_time: float):
@@ -357,21 +377,80 @@ class Node:
         # IF I have already received the block; THEN I drop it
         if block_obj.curr_block_hash in self.blocks_all:
             return
+        # IF block_obj.index < max value of current blockchain length; THEN I drop it
+        if block_obj.index < self.blocks_all[self.block_chain_leafs[-1]].index:
+            return
         # IF block is invalid; then I drop it
-        if self.block_validate(block_obj) == False:
+        if self.is_block_validate(block_obj) == False:
             return
         # Store the block and forward it to others
         self.blocks_all[block_obj.curr_block_hash] = block_obj
+        if block_obj.prev_block_hash not in self.blocks_all.keys():
+            g_logger.warning(
+                f'Block received whose parent is not received. {self.node_id=} , {senders_id=} , {block_obj=}')
         for node in self.neighbors.values():
             # Do NOT send the block back to the node from which it was received
             if node.node_id == senders_id:
                 continue
             self.block_send(block_obj, node.node_id)
-        # TODO - other condition checks
+
+        to_start_new_mining = False
+        if block_obj.index > self.blocks_all[self.block_chain_leafs[-1]].index:
+            to_start_new_mining = True
+            self.last_receive_time = current_time
+            self.change_mining_branch(self.block_chain_leafs[-1], block_obj.curr_block_hash)
+
+        # Insert the block_obj into self.block_chain_leafs
+        idx_insert = 0
+        for i in range(len(self.block_chain_leafs) - 1, -1, -1):  # "i" goes from "N-1" to "0"
+            # NOTE: Mostly, the less than condition will never be true in our simulation
+            #       However, it can be true in real life
+            if block_obj.index <= self.blocks_all[self.block_chain_leafs[i]].index:
+                continue
+            idx_insert = i + 1
+            break
+        self.block_chain_leafs.insert(idx_insert, block_obj)
+        if to_start_new_mining:
+            self.mining_start()
         pass
 
     def broadcast(self, obj_to_broadcast):
         # TODO
+        pass
+
+    def get_new_transaction_greedy(self) -> List[Transaction]:
+        if len(self.txn_pool) <= self.max_transactions_per_block - 1:
+            return copy.deepcopy(self.txn_pool)
+        return copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
+
+    def get_new_block(self) -> Block:
+        # Point 7 of the PDF
+        mining_completion_time = self.simulator.get_global_time() + numpy.random.exponential(1)  # TODO
+        return Block(
+            self.block_chain_leafs[-1],
+            mining_completion_time,
+            self.blocks_all[self.block_chain_leafs[-1]].index + 1,
+            self.get_new_transaction_greedy(),
+            mining_completion_time
+        )
+        pass
+
+    def mining_start(self):
+        new_block: Block = self.get_new_block()
+        if len(new_block.transactions) == 0:
+            return False
+        self.simulator.event_queue.push(
+            Event(
+                new_block.creation_time,
+                EventType.EVENT_BLOCK_CREATE_SUCCESS,
+                new_block
+            )
+        )
+        return True
+
+    def mining_complete(self):
+        # TODO
+
         pass
 
     def serialize_blockchain_to_str_v1(self) -> str:
@@ -386,11 +465,13 @@ class EventType(enum.Enum):
     EVENT_RECV_TRANSACTION = 2
     EVENT_SEND_BLOCK = 3
     EVENT_RECV_BLOCK = 4
+    EVENT_BLOCK_CREATE = 5
+    EVENT_BLOCK_CREATE_SUCCESS = 6  # Queue -> data_obj: Block
 
 
 class Event:
-    def __init__(self, event_time: float, event_type: EventType, data_obj):
-        self.event_time: float = 0.0
+    def __init__(self, event_completion_time: float, event_type: EventType, data_obj):
+        self.event_completion_time: float = 0.0
         self.event_type: EventType = EventType.EVENT_UNDEFINED
         self.data_obj = data_obj
 
@@ -402,7 +483,7 @@ class EventQueue:
         self.events: List[Tuple[float, Event]] = list()
 
     def push(self, new_event: Event):
-        heapq.heappush(self.events, (new_event.event_time, new_event))
+        heapq.heappush(self.events, (new_event.event_completion_time, new_event))
 
     def pop(self) -> Event:
         return heapq.heappop(self.events)[1]
