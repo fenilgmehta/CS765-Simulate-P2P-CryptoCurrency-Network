@@ -354,6 +354,9 @@ class Node:
         curr_blockchain_hash = self.block_chain_leafs[-1]
         while curr_blockchain_hash != self.GENESIS_BLOCK.prev_block_hash:
             for txn in self.blocks_all[curr_blockchain_hash].transactions:
+                if transaction_obj.txn_hash == txn.txn_hash:
+                    # Transaction is already included in the past block
+                    return False
                 if transaction_obj.id_sender == txn.id_sender:
                     senders_balance -= txn.coin_amount
                 elif transaction_obj.id_sender == txn.id_receiver:
