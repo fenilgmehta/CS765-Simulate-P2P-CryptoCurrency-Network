@@ -1,8 +1,12 @@
 {
-    "total_nodes" : 10,
-    "slow_nodes_percent" : 20,
-    "txn_interarrival_mean" : 4,
-    "node_initial_coins_low" : 10,
-    "node_initial_coins_high" : 200,
-    "max_transactions_per_block": 1000
+  "n_total_nodes": 20,
+  "z_percent_slow_nodes": 40,
+  "T_tx_exp_txn_interarrival_mean_sec": 4,
+  "T_k_exp_sec_low": 60,
+  "T_k_exp_sec_high": 600,
+  "node_initial_coins_low": 10,
+  "node_initial_coins_high": 200,
+  "max_transactions_per_block": 1000,
+  "min_light_delay_sec": 0.010,
+  "max_light_delay_sec": 0.500
 }
