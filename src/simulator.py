@@ -249,7 +249,7 @@ class Simulator:
         while os.path.exists(temp_name):
             g_logger.error(f'File already exists: "{file_name}"')
             temp_name = file_name + f'_({i:03d}).txt'
-            return
+            i += 1
         with open(temp_name, 'w+') as f:
             f.write(node_obj.serialize_blockchain_to_str_v1())
         pass
@@ -445,8 +445,10 @@ class Node:
             curr_block_hash = self.blocks_all[curr_block_hash].prev_block_hash
         self.txn_pool = list(txn_pool_temp)
 
-    def is_transaction_validate(self, transaction_obj, curr_tail=None):
+    def is_transaction_validate(self, transaction_obj, curr_tail=None) -> bool:
         global g_logger
+        if transaction_obj.coin_amount < 0.0:
+            return False
         senders_balance = 0.0
         curr_blockchain_hash = self.block_chain_leafs[-1]
         if curr_tail is not None:
@@ -460,11 +462,13 @@ class Node:
                     senders_balance -= txn.coin_amount
                 elif transaction_obj.id_sender == txn.id_receiver:
                     senders_balance += txn.coin_amount
-                if senders_balance < 0.0:
-                    g_logger.error(f'The blockchain has -ve balance for {transaction_obj.id_sender=}')
-                    g_logger.error(f'Blockchain tail = {self.block_chain_leafs[-1]}')
-                    # TODO: do more verbose logging
             curr_blockchain_hash = self.blocks_all[curr_blockchain_hash].prev_block_hash
+        if senders_balance < 0.0:
+            g_logger.error(f'Processing Node = {self.node_id}')
+            g_logger.error(f'senders_balance = {senders_balance}')
+            g_logger.error(f'Blockchain tail = {self.block_chain_leafs[-1]}')
+            g_logger.error(f'The blockchain has -ve balance for transaction = {transaction_obj}')
+            # TODO: do more verbose logging
         return senders_balance >= transaction_obj.coin_amount
 
     def transaction_create(self):
@@ -546,14 +550,14 @@ class Node:
             return -1
         if block_obj.prev_block_hash not in self.blocks_all:
             g_logger.warning(f'Block received whose parent is not yet received to this Node')
-            g_logger.warning(f'{self.node_id=} , {block_obj.str_all()=}')
-            g_logger.debug(f'self.blocks_all.keys()   = {list(self.blocks_all.keys())}')
-            g_logger.debug(f'self.blocks_all.values() = {[i.str_all() for i in self.blocks_all.values()]}')
-            for node in self.simulator.nodes_list:
-                if node.blocks_all[node.block_chain_leafs[-1]].index >= block_obj.index:
-                    g_logger.debug(f'\tnode.node_id = {node.node_id}')
-                    g_logger.debug(f'\tnode.blocks_all.keys()   = {[str(i) for i in node.blocks_all.keys()]}')
-                    g_logger.debug(f'\tnode.blocks_all.values() = {[i.str_all() for i in node.blocks_all.values()]}')
+            # g_logger.warning(f'{self.node_id=} , {block_obj.str_all()=}')
+            # g_logger.debug(f'self.blocks_all.keys()   = {list(self.blocks_all.keys())}')
+            # g_logger.debug(f'self.blocks_all.values() = {[i.str_all() for i in self.blocks_all.values()]}')
+            # for node in self.simulator.nodes_list:
+            #     if node.blocks_all[node.block_chain_leafs[-1]].index >= block_obj.index:
+            #         g_logger.debug(f'\tnode.node_id = {node.node_id}')
+            #         g_logger.debug(f'\tnode.blocks_all.keys()   = {[str(i) for i in node.blocks_all.keys()]}')
+            #         g_logger.debug(f'\tnode.blocks_all.values() = {[i.str_all() for i in node.blocks_all.values()]}')
             return 0
         if self.blocks_all[block_obj.prev_block_hash].index + 1 != block_obj.index:
             return -1
@@ -669,9 +673,9 @@ class Node:
         # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
         # if len(self.txn_pool) <= self.max_transactions_per_block - 1:
         #     return copy.deepcopy(self.txn_pool)
+        self.txn_pool = list(filter(lambda x: self.is_transaction_validate(x, curr_tail), self.txn_pool))
         return copy.deepcopy(
-            [txn for txn in self.txn_pool
-             if self.is_transaction_validate(txn, curr_tail)][:self.max_transactions_per_block - 1]
+            self.txn_pool[:self.max_transactions_per_block - 1]
         )
 
     def get_new_block(self) -> Tuple[bool, Union[Block, None]]:
@@ -737,7 +741,8 @@ class Node:
             g_logger.info(
                 f'Node Id = {self.node_id} , this mining result is to be discarded because we received a '
                 f'new block which makes a longer blockchain after the mining started and before it ended. '
-                f'Mining start time = {block.creation_time:0.5f}, Block receive time = {self.last_receive_time:0.5f}'
+                f'Mining start time = {block.creation_time:0.5f}, Block receive time = {self.last_receive_time:0.5f}, '
+                f'Current time = {self.simulator.get_global_time()}'
             )
             return
         if self.blocks_all[self.block_chain_leafs[-1]].index > block.index:
