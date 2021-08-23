@@ -19,6 +19,8 @@
     1. The received block is too old
     2. The block creator would not spend his time and computation power in creating and sending a block which does not
        create a longest chain for the receiver
+- Transactions created are always assumed to be authentic in this simulation. In real world, they are signed by the
+  sender
 - `mining reward` is always the first transaction of any block, and sender is `-1`
     - `Sender == -1` means money is created from thin air
 - `mining_reward_update_percent` is used as follows: `new_reward = old_reward (1 + mining_reward_update_percent / 100)`
@@ -42,6 +44,7 @@ python simulator.py --config config.json --debug
 - Exponential Distribution
     - [https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html](https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html)
     - [https://en.wikipedia.org/wiki/Exponential_distribution](https://en.wikipedia.org/wiki/Exponential_distribution)
+- [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
 - [https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4](Static Typing in Python)
 - [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
     - KiloByte (kB) vs. KibiByte (KiB)
