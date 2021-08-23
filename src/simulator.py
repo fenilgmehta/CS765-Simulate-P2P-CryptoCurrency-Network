@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-import enum
-import json
-import hashlib
-import os
-import sys
-import math
-import random
-import coloredlogs
-import logging
-import numpy
 import copy
+import enum
+import hashlib
 import heapq
+import json
+import logging
+import os
+import random
 from typing import List, Dict, Union, Tuple, Set
 
-import numpy as np
+import coloredlogs
+import numpy
 
 g_logger = None
 
@@ -158,11 +155,11 @@ class Simulator:
             return False
         self.global_time = event.event_completion_time
         while True:
-            if event.event_type == EventType.EVENT_RECV_TRANSACTION:
+            if event.event_type == EventType.EVENT_TRANSACTION_CREATE:
+                self.nodes_list[event.event_receiver_id].transaction_event_handler()
+            elif event.event_type == EventType.EVENT_RECV_TRANSACTION:
                 txn: Transaction = event.data_obj
                 self.nodes_list[event.event_receiver_id].transaction_recv(txn, event.event_creator_id)
-            elif event.event_type == EventType.EVENT_TRANSACTION_CREATE:
-                self.nodes_list[event.event_receiver_id].transaction_create()
             elif event.event_type == EventType.EVENT_RECV_BLOCK:
                 blk: Block = event.data_obj
                 self.nodes_list[event.event_receiver_id].block_recv(blk, event.event_creator_id, self.global_time)
@@ -281,7 +278,7 @@ class Node:
         self.node_id = node_id
         self.simulator: Simulator = simulator
         self.is_network_fast = is_network_fast
-        # self.coins = 0 # current Balance of each node
+        # self.coins = 0  # current Balance of each node
 
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
@@ -374,27 +371,37 @@ class Node:
         return senders_balance >= transaction_obj.coin_amount
 
     def transaction_create(self):
-        """
-            - Randomly Select a node for receiver
-            - Coin Amount : generate randomly
-        """
-        txn_receiver = random.choice([ele for ele in self.simulator.nodes_list if ele.node_id != self.node_id])
-        txn_amount = round(random.uniform(0, 50), 2)  # TODO : make this range better
-        txt_create_time = self.simulator.get_global_time()
-        txn_obj = Transaction(txt_create_time, self.node_id, txn_receiver, txn_amount)
-        for node in self.neighbors.values():
-            self.transaction_send(txn_obj, node)
-        next_txn_gen_event_time = np.exp(
-            1 / self.simulator.simulator_parameters.T_tx_exp_txn_interarrival_mean_sec)  # Doubt : time unit???
-
+        next_txn_gen_event_delay = numpy.exp(
+            1 / self.simulator.simulator_parameters.T_tx_exp_txn_interarrival_mean_sec
+        )  # TODO: time unit is seconds
         self.simulator.event_queue.push(
             Event(
-                next_txn_gen_event_time,
+                self.simulator.get_global_time() + next_txn_gen_event_delay,
                 EventType.EVENT_TRANSACTION_CREATE,
                 self.node_id,
                 self.node_id,
+                None
             )
         )
+
+    def transaction_event_handler(self):
+        """
+        - Randomly Select a node for receiver
+        - Coin Amount : generate randomly
+        """
+        txn_receiver: Node = random.choice([node for node in self.simulator.nodes_list if node.node_id != self.node_id])
+        txn_amount: float = round(random.uniform(0, 50), 2)  # TODO : make this range better
+        txn_obj: Transaction = Transaction(self.simulator.get_global_time(), self.node_id, txn_receiver.node_id, txn_amount)
+
+        if self.is_transaction_validate(txn_obj):
+            self.txn_pool.append(txn_obj)
+            self.txn_all[txn_obj.txn_hash] = txn_obj
+        # NOTE: even invalid transactions are send to neighbors to prove that other
+        #       peers are working properly they will discard invalid received data
+        for node in self.neighbors.values():
+            self.transaction_send(txn_obj, node)
+
+        self.transaction_create()
 
     def transaction_send(self, transaction_obj: Transaction, receiver_node: NodeSiblingInfo):
         """
@@ -402,10 +409,10 @@ class Node:
             it computes the latency to send the transaction
             it then generates an event in the event queue at that time.
         """
-        event_run_time = self.simulator.get_global_time() + receiver_node.find_message_latency(transaction_obj.size())
+        network_delay: float = receiver_node.find_message_latency(8 * transaction_obj.size())
         self.simulator.event_queue.push(
             Event(
-                event_run_time,
+                self.simulator.get_global_time() + network_delay,
                 EventType.EVENT_RECV_TRANSACTION,
                 self.node_id,
                 receiver_node.node_id,
@@ -567,13 +574,13 @@ class Node:
 # REFER: https://www.tutorialspoint.com/enum-in-python
 class EventType(enum.Enum):
     EVENT_UNDEFINED = 0
-    EVENT_SEND_TRANSACTION = 1
-    EVENT_RECV_TRANSACTION = 2  # Queue -> transaction_obj: Transaction
-    EVENT_SEND_BLOCK = 3
-    EVENT_RECV_BLOCK = 4  # Queue -> block_obj: Block
-    EVENT_BLOCK_CREATE = 5
-    EVENT_BLOCK_CREATE_SUCCESS = 6  # Queue -> data_obj: Block
-    EVENT_TRANSACTION_CREATE = 7
+    EVENT_TRANSACTION_CREATE = 1  # Queue -> data_obj = None
+    EVENT_SEND_TRANSACTION = 2
+    EVENT_RECV_TRANSACTION = 3  # Queue -> transaction_obj: Transaction
+    EVENT_SEND_BLOCK = 4
+    EVENT_RECV_BLOCK = 5  # Queue -> block_obj: Block
+    EVENT_BLOCK_CREATE = 6
+    EVENT_BLOCK_CREATE_SUCCESS = 7  # Queue -> data_obj: Block
 
 
 class Event:
@@ -583,7 +590,7 @@ class Event:
             event_type: EventType,
             event_creator_id: int,
             event_receiver_id: int,
-            data_obj: Union[Transaction, Block]
+            data_obj: Union[None, Transaction, Block]
     ):
         self.event_completion_time: float = event_completion_time
         self.event_type: EventType = event_type
