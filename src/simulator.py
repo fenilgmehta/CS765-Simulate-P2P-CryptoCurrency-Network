@@ -5,6 +5,7 @@ import hashlib
 import heapq
 import json
 import logging
+import math
 import os
 import random
 import sys
@@ -247,7 +248,7 @@ class Simulator:
         i = 0
         while os.path.exists(temp_name):
             g_logger.error(f'File already exists: "{file_name}"')
-            temp_name = file_name + f'_({str(i):03d}).txt'
+            temp_name = file_name + f'_({i:03d}).txt'
             return
         with open(temp_name, 'w+') as f:
             f.write(node_obj.serialize_blockchain_to_str_v1())
@@ -319,11 +320,18 @@ class Block:
         return str([self.prev_block_hash, self.creation_time, self.index, [str(txn) for txn in self.transactions]])
 
     def str_all(self) -> str:
-        return str([self.curr_block_hash, self.prev_block_hash, self.creation_time, self.index, [str(txn) for txn in self.transactions]])
+        return str([self.curr_block_hash, self.prev_block_hash, self.creation_time, self.index,
+                    [str(txn) for txn in self.transactions]])
 
     def serialize(self) -> str:
-        return str([self.curr_block_hash, self.recv_time, self.prev_block_hash, self.creation_time, self.index,
-                    self.transactions])
+        return str([
+            self.curr_block_hash,
+            self.recv_time,
+            self.prev_block_hash,
+            self.creation_time,
+            self.index,
+            [str(i) for i in self.transactions]
+        ])
 
     def size(self) -> int:
         # REFER: https://stackoverflow.com/questions/14329794/get-size-in-bytes-needed-for-an-integer-in-python
@@ -356,6 +364,7 @@ class Node:
 
         self.GENESIS_BLOCK = GENESIS_BLOCK
         self.blocks_all: Dict[str, Block] = {GENESIS_BLOCK.curr_block_hash: GENESIS_BLOCK}
+        self.blocks_unvalidated: Dict[str, Tuple[int, Block]] = dict()
         self.block_chain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         # Point 7 of PDF: Exponential Distribution Mean for the
@@ -414,11 +423,25 @@ class Node:
     def change_mining_branch(self, block_tail_hash_curr: str, block_tail_hash_new: str):
         # NOTE: this can be optimized by finding the common ancestor of the
         #       "current tail" on which mining is being done and the "new tail"
+        global g_logger
         txn_pool_temp: Set[Transaction] = set(self.txn_all.values())
         curr_block_hash: str = self.block_chain_leafs[-1]
         while curr_block_hash != self.GENESIS_BLOCK.curr_block_hash:
+            # NOTE: we use [1:] because mining reward transactions are not broadcasted
             for txn in self.blocks_all[curr_block_hash].transactions:
-                txn_pool_temp.remove(txn)
+                if txn.id_sender == -1:
+                    continue
+                try:
+                    # NOTE: there is a possibility that a transaction may not have reached me
+                    #       but someone must have included in the blockchain and I must have
+                    #       received the block even before I see the transaction
+                    if txn in txn_pool_temp:
+                        txn_pool_temp.remove(txn)
+                except Exception as e:
+                    g_logger.error(e)
+                    g_logger.debug(f'{str(txn)}')
+                    g_logger.debug(f'{[str(i) for i in txn_pool_temp]}')
+                    sys.exit(1)
             curr_block_hash = self.blocks_all[curr_block_hash].prev_block_hash
         self.txn_pool = list(txn_pool_temp)
 
@@ -511,11 +534,14 @@ class Node:
             self.mining_start()
         pass
 
-    def is_block_validate(self, block_obj: Block):
-        """NOTE: first transaction of all blocks SHOULD ONLY be mining reward transaction"""
+    def is_block_validate(self, block_obj: Block) -> int:
+        """
+        NOTE: first transaction of all blocks SHOULD ONLY be mining reward transaction
+        :returns -1 to denote "False", 0 to denote "can not say", 1 to denote "True"
+        """
         global g_logger
         if len(block_obj.transactions) <= 1:
-            return False
+            return -1
         if block_obj.prev_block_hash not in self.blocks_all:
             g_logger.warning(f'Block received whose parent is not yet received to this Node')
             g_logger.warning(f'{self.node_id=} , {block_obj.str_all()=}')
@@ -526,13 +552,32 @@ class Node:
                     g_logger.debug(f'\tnode.node_id = {node.node_id}')
                     g_logger.debug(f'\tnode.blocks_all.keys()   = {[str(i) for i in node.blocks_all.keys()]}')
                     g_logger.debug(f'\tnode.blocks_all.values() = {[i.str_all() for i in node.blocks_all.values()]}')
+            return 0
         if self.blocks_all[block_obj.prev_block_hash].index + 1 != block_obj.index:
-            return False
+            return -1
+
+        if block_obj.transactions[0].id_sender == -1:
+            # Ensure mining fee is right
+            c = block_obj.transactions[0].coin_amount
+            sp = self.simulator.simulator_parameters
+            c_expected = sp.mining_reward_start * (
+                    (1 + (sp.mining_reward_update_percent / 100)) **
+                    (block_obj.index // sp.mining_reward_update_block_time)
+            )
+            # REFER: https://stackoverflow.com/questions/5595425/what-is-the-best-way-to-compare-floats-for-almost-equality-in-python
+            if not math.isclose(c, c_expected):
+                return -1
+        elif self.is_transaction_validate(block_obj.transactions[0]) == False:
+            # Miner may not want to take any reward
+            return -1
+
         for txn in block_obj.transactions[1:]:
+            if txn.id_sender == -1:
+                return -1  # Only FIRST transaction can be mining reward transaction
             if self.is_transaction_validate(txn):
                 continue
-            return False
-        return True
+            return -1
+        return 1
 
     def block_send(self, block_obj: Block, receiver_node: NodeSiblingInfo):
         self.simulator.event_queue.push(
@@ -547,6 +592,14 @@ class Node:
 
     def block_recv(self, block_obj: Block, senders_id: int, current_time: float):
         global g_logger
+
+        def m_block_send_all_except(m_block_obj, m_peer_exception_id):
+            for m_node in self.neighbors.values():
+                # Do NOT send the block back to the node from which it was received
+                if m_node.node_id == m_peer_exception_id:
+                    continue
+                self.block_send(m_block_obj, m_node)
+
         # set the block receive time
         block_obj.recv_time = current_time
 
@@ -557,24 +610,44 @@ class Node:
         if block_obj.index < self.blocks_all[self.block_chain_leafs[-1]].index:
             return
         # IF block is invalid; then I drop it
-        if self.is_block_validate(block_obj) == False:
+        block_status: int = self.is_block_validate(block_obj)
+        if block_status == -1:
+            return
+        if block_status == 0:
+            self.blocks_unvalidated[block_obj.curr_block_hash] = (senders_id, block_obj,)
             return
         # Store the block and forward it to others
         self.blocks_all[block_obj.curr_block_hash] = block_obj
         if block_obj.prev_block_hash not in self.blocks_all.keys():
             g_logger.warning(
                 f'Block received whose parent is not received. {self.node_id=} , {senders_id=} , {block_obj=}')
-        for node in self.neighbors.values():
-            # Do NOT send the block back to the node from which it was received
-            if node.node_id == senders_id:
-                continue
-            self.block_send(block_obj, node)
+        m_block_send_all_except(block_obj, senders_id)
 
         to_start_new_mining = False
         if block_obj.index > self.blocks_all[self.block_chain_leafs[-1]].index:
             to_start_new_mining = True
             self.last_receive_time = current_time
             self.change_mining_branch(self.block_chain_leafs[-1], block_obj.curr_block_hash)
+
+        # Check "self.blocks_unvalidated" and updated "block_obj"
+        while True:
+            end_while_loop = True
+            for blk_hash, (blk_sender_id, blk_obj) in self.blocks_unvalidated.items():
+                if block_obj.curr_block_hash != blk_obj.prev_block_hash:
+                    continue
+                # We have already received a successor of the received node
+                if self.is_block_validate(blk_obj) == 1:
+                    block_obj = blk_obj
+                    self.blocks_all[blk_hash] = blk_obj
+                    m_block_send_all_except(blk_obj, blk_sender_id)
+                    end_while_loop = False
+                    g_logger.info(f'Successfully processed an unvalidated block :)')
+                else:
+                    end_while_loop = True
+                self.blocks_unvalidated.pop(blk_hash)
+                break
+            if end_while_loop:
+                break
 
         # Insert the block_obj into self.block_chain_leafs
         idx_insert = 0
@@ -615,7 +688,10 @@ class Node:
         except Exception as e:
             g_logger.error(e)
             g_logger.debug(f'curr_tail       = {type(curr_tail)} {curr_tail}')
-            g_logger.debug(f'self.blocks_all = {type(self.blocks_all)} {[[str(i), str(j)] for i,j in self.blocks_all.items()]}')
+            g_logger.debug(
+                f'self.blocks_all = {type(self.blocks_all)} {[[str(i), str(j)] for i, j in self.blocks_all.items()]}'
+            )
+            sys.exit(1)
         transactions_to_include = [txn_mining_reward] + self.get_new_transaction_greedy(curr_tail)
         if len(transactions_to_include) == 1:
             return False, None
@@ -762,6 +838,7 @@ def Main(args: Dict):
             break
         # input()
     mySimulator.write_all_node_tree_to_file()
+    g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
 
 if __name__ == '__main__':
