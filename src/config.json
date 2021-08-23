@@ -10,5 +10,8 @@
   "max_light_delay_sec": 0.500,
   "node_initial_coins_low": 10,
   "node_initial_coins_high": 200,
-  "max_transactions_per_block": 1000
+  "max_transactions_per_block": 1000,
+  "mining_reward_start": 50,
+  "mining_reward_update_percent": -50,
+  "mining_reward_update_block_time": 2016
 }
