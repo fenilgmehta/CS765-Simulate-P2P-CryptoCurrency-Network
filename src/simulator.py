@@ -35,6 +35,9 @@ class SimulatorParameters:
         self.node_initial_coins_low: float = 0  # used to initialize the genesis block
         self.node_initial_coins_high: float = 0  # used to initialize the genesis block
         self.max_transactions_per_block: int = 0  # Point 7 of PDF: max transactions a block can store
+        self.mining_reward_start = 50
+        self.mining_reward_update_percent = -50
+        self.mining_reward_update_block_time = 2016
 
         self.number_of_slow_nodes: int = 0
         self.number_of_fast_nodes: int = 0
@@ -70,6 +73,10 @@ class SimulatorParameters:
         self.node_initial_coins_low: float = float(parameters['node_initial_coins_low'])
         self.node_initial_coins_high: float = float(parameters['node_initial_coins_high'])
         self.max_transactions_per_block: int = int(parameters['max_transactions_per_block'])
+
+        self.mining_reward_start = parameters['mining_reward_start']
+        self.mining_reward_update_percent = parameters['mining_reward_update_percent']
+        self.mining_reward_update_block_time = parameters['mining_reward_update_block_time']
 
         # ---
         # z% nodes are slow
@@ -336,7 +343,7 @@ class Node:
             #   - dij is the queuing delay at senders side (i.e. node i)
             #   - dij is randomly chosen from an exponential distribution with some mean `96kbits/c_ij`
             #   - NOTE: d_ij must be randomly chosen for each message transmitted from "i" to "j"
-            d_ij = numpy.random.exponential(96_000 / self.c_ij)  # TODO
+            d_ij = numpy.random.exponential(96_000 / self.c_ij)
             return self.rho_ij + (message_size_bits / self.c_ij) + d_ij
 
     def change_mining_branch(self, block_tail_hash_curr: str, block_tail_hash_new: str):
@@ -371,9 +378,9 @@ class Node:
         return senders_balance >= transaction_obj.coin_amount
 
     def transaction_create(self):
-        next_txn_gen_event_delay = numpy.exp(
-            1 / self.simulator.simulator_parameters.T_tx_exp_txn_interarrival_mean_sec
-        )  # TODO: time unit is seconds
+        next_txn_gen_event_delay = numpy.random.exponential(
+            self.simulator.simulator_parameters.T_tx_exp_txn_interarrival_mean_sec
+        )
         self.simulator.event_queue.push(
             Event(
                 self.simulator.get_global_time() + next_txn_gen_event_delay,
@@ -391,7 +398,8 @@ class Node:
         """
         txn_receiver: Node = random.choice([node for node in self.simulator.nodes_list if node.node_id != self.node_id])
         txn_amount: float = round(random.uniform(0, 50), 2)  # TODO : make this range better
-        txn_obj: Transaction = Transaction(self.simulator.get_global_time(), self.node_id, txn_receiver.node_id, txn_amount)
+        txn_obj: Transaction = Transaction(self.simulator.get_global_time(), self.node_id, txn_receiver.node_id,
+                                           txn_amount)
 
         if self.is_transaction_validate(txn_obj):
             self.txn_pool.append(txn_obj)
@@ -452,13 +460,13 @@ class Node:
             return False
         return True
 
-    def block_send(self, block_obj: Block, receivers_id: int):
+    def block_send(self, block_obj: Block, receiver_node: NodeSiblingInfo):
         self.simulator.event_queue.push(
             Event(
-                self.simulator.get_global_time() + numpy.random.exponential(1),  # TODO
+                self.simulator.get_global_time() + receiver_node.find_message_latency(8 * block_obj.size()),
                 EventType.EVENT_RECV_BLOCK,
                 self.node_id,
-                receivers_id,
+                receiver_node.node_id,
                 block_obj
             )
         )
@@ -486,7 +494,7 @@ class Node:
             # Do NOT send the block back to the node from which it was received
             if node.node_id == senders_id:
                 continue
-            self.block_send(block_obj, node.node_id)
+            self.block_send(block_obj, node)
 
         to_start_new_mining = False
         if block_obj.index > self.blocks_all[self.block_chain_leafs[-1]].index:
@@ -508,19 +516,26 @@ class Node:
             self.mining_start()
         pass
 
-    def get_new_transaction_greedy(self) -> List[Transaction]:
-        if len(self.txn_pool) <= self.max_transactions_per_block - 1:
-            return copy.deepcopy(self.txn_pool)
-        return copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
+    def get_new_transaction_greedy(self, curr_tail: str) -> List[Transaction]:
+        sp: SimulatorParameters = self.simulator.simulator_parameters
+        txn_mining_reward: Transaction = self.blocks_all[curr_tail].transactions[0]
+        if self.blocks_all[curr_tail].index % sp.mining_reward_update_block_time:
+            txn_mining_reward.coin_amount = txn_mining_reward.coin_amount * (1 + sp.mining_reward_update_percent / 100)
+        # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
+        # if len(self.txn_pool) <= self.max_transactions_per_block - 1:
+        #     return copy.deepcopy(self.txn_pool)
+        return [txn_mining_reward] + copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
 
     def get_new_block(self) -> Block:
         # Point 7 of the PDF
-        mining_completion_time = self.simulator.get_global_time() + numpy.random.exponential(1)  # TODO
+        curr_tail = self.block_chain_leafs[-1]
+        mining_completion_time = self.simulator.get_global_time() \
+                                 + numpy.random.exponential(self.T_k_exp_block_mining_mean)
         return Block(
-            self.block_chain_leafs[-1],
+            curr_tail,
             mining_completion_time,
-            self.blocks_all[self.block_chain_leafs[-1]].index + 1,
-            self.get_new_transaction_greedy(),
+            self.blocks_all[curr_tail].index + 1,
+            self.get_new_transaction_greedy(curr_tail),
             mining_completion_time
         )
         pass
@@ -563,7 +578,7 @@ class Node:
 
         # Broadcast the "block" to all "self.neighbors"
         for node in self.neighbors.values():
-            self.block_send(block, node.node_id)
+            self.block_send(block, node)
         pass
 
     def serialize_blockchain_to_str_v1(self) -> str:
@@ -672,7 +687,7 @@ if __name__ == '__main__':
 
     g_logger.debug('Debugging is ON')
     g_logger.debug(f'{args=}')
-    g_logger.handlers[
-        0].flush()  # REFER: https://stackoverflow.com/questions/13176173/python-how-to-flush-the-log-django/13753911
+    # REFER: https://stackoverflow.com/questions/13176173/python-how-to-flush-the-log-django/13753911
+    g_logger.handlers[0].flush()
 
     Main(vars(args))
