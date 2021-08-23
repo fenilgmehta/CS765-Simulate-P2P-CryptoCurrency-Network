@@ -445,10 +445,12 @@ class Node:
             curr_block_hash = self.blocks_all[curr_block_hash].prev_block_hash
         self.txn_pool = list(txn_pool_temp)
 
-    def is_transaction_validate(self, transaction_obj):
+    def is_transaction_validate(self, transaction_obj, curr_tail=None):
         global g_logger
         senders_balance = 0.0
         curr_blockchain_hash = self.block_chain_leafs[-1]
+        if curr_tail is not None:
+            curr_blockchain_hash = curr_tail
         while curr_blockchain_hash != self.GENESIS_BLOCK.prev_block_hash:
             for txn in self.blocks_all[curr_blockchain_hash].transactions:
                 if transaction_obj.txn_hash == txn.txn_hash:
@@ -667,7 +669,10 @@ class Node:
         # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
         # if len(self.txn_pool) <= self.max_transactions_per_block - 1:
         #     return copy.deepcopy(self.txn_pool)
-        return copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
+        return copy.deepcopy(
+            [txn for txn in self.txn_pool
+             if self.is_transaction_validate(txn, curr_tail)][:self.max_transactions_per_block - 1]
+        )
 
     def get_new_block(self) -> Tuple[bool, Union[Block, None]]:
         # Point 7 of the PDF
@@ -748,7 +753,6 @@ class Node:
         # Add block to the blockchain
         self.blocks_all[block.curr_block_hash] = block
         self.block_chain_leafs[-1] = block.curr_block_hash
-
         # Remove processed transactions from the transaction pool
         # NOTE: we use [1:] because mining reward transaction will not be in the "self.txn_pool"
         for txn in block.transactions[1:]:
