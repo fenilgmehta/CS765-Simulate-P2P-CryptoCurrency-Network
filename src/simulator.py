@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import sys
 from typing import List, Dict, Union, Tuple, Set
 
 import coloredlogs
@@ -38,6 +39,7 @@ class SimulatorParameters:
         self.mining_reward_start = 50
         self.mining_reward_update_percent = -50
         self.mining_reward_update_block_time = 2016
+        self.graph_connectivity_strength_percent = 100
 
         self.number_of_slow_nodes: int = 0
         self.number_of_fast_nodes: int = 0
@@ -78,6 +80,8 @@ class SimulatorParameters:
         self.mining_reward_update_percent = parameters['mining_reward_update_percent']
         self.mining_reward_update_block_time = parameters['mining_reward_update_block_time']
 
+        self.graph_connectivity_strength_percent = parameters['graph_connectivity_strength_percent']
+
         # ---
         # z% nodes are slow
         self.number_of_slow_nodes: int = int(self.z_percent_slow_nodes * self.n_total_nodes) // 100
@@ -108,6 +112,12 @@ class SimulatorParameters:
         print(f'         max initial coins = {self.node_initial_coins_high}')
         print(f'max transactions per block = {self.max_transactions_per_block}')
         print()
+        print(f'Mining reward start             = {self.mining_reward_start}')
+        print(f'Mining reward update percent    = {self.mining_reward_update_percent}')
+        print(f'Mining reward update block time = {self.mining_reward_update_block_time}')
+        print()
+        print(f'Graph Connectivity Strength     = {self.graph_connectivity_strength_percent} %')
+        print()
 
 
 class Simulator:
@@ -124,8 +134,11 @@ class Simulator:
                                      + ([True] * self.simulator_parameters.number_of_fast_nodes)
         # Create the nodes
         self.nodes_list = [Node(i, self, GENESIS_BLOCK, i_val) for i, i_val in enumerate(list_slow_fast)]
-        # TODO: Implement point 4 of the problem statement
-        #       i.e. Create a connected graph
+        self.__create_connected_graph()
+        for node in self.nodes_list:
+            node.transaction_create()
+        # TODO: Point 4 of the problem statement, read some research paper and improve this graph creation
+        # Create a connected graph
         pass
 
     # REFER: https://www.geeksforgeeks.org/private-methods-in-python/
@@ -154,14 +167,51 @@ class Simulator:
         transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(recv_node_idx, money)]
         return Block('-1', -1.0, 0, transactions, 0)
 
+    def __create_connected_graph(self):
+        # REFER: https://stackoverflow.com/questions/2041517/random-simple-connected-graph-generation-with-given-sparseness
+        # REFER: https://stackoverflow.com/questions/6667201/how-to-define-a-two-dimensional-array
+        n: int = self.simulator_parameters.n_total_nodes
+        adj_mat: List[List[int]] = [[0 for i in range(n)] for j in range(n)]  # Stores ρ_ij, this is NOT symmetric
+        for i in range(n):
+            for j in range(n):
+                # Point 5 of the PDF
+                adj_mat[i][j] = numpy.random.randint(10, 500) / 1000  # Time is stored in Seconds
+        edges: int = (n * (n + 1)) // 2
+        edges = (n - 1) + ((edges - (n - 1)) * self.simulator_parameters.graph_connectivity_strength_percent) // 100
+        for i in range(1, n):
+            while True:
+                peer_node_id: int = numpy.random.randint(0, i)  # generates "0" to "i-1" randomly
+                c_ij = 5 * 1_000_000  # IF any one of the node is SLOW
+                if self.nodes_list[i].is_network_fast and self.nodes_list[peer_node_id].is_network_fast:
+                    c_ij = 100 * 1_000_000  # IF both the nodes are FAST
+                status = self.nodes_list[i].add_new_peer(peer_node_id, adj_mat[i][peer_node_id], c_ij)
+                status = self.nodes_list[peer_node_id].add_new_peer(i, adj_mat[peer_node_id][i], c_ij)
+                if status == True:
+                    break
+        for i in range(edges - (n - 1)):
+            while True:
+                node_id_1: int = numpy.random.randint(0, n)  # generates "0" to "i-1" randomly
+                node_id_2: int = numpy.random.randint(0, n)  # generates "0" to "i-1" randomly
+                if node_id_1 == node_id_2:
+                    continue
+                c_ij = 5 * 1_000_000  # IF any one of the node is SLOW
+                if self.nodes_list[node_id_1].is_network_fast and self.nodes_list[node_id_2].is_network_fast:
+                    c_ij = 100 * 1_000_000  # IF both the nodes are FAST
+                status = self.nodes_list[node_id_1].add_new_peer(node_id_2, adj_mat[node_id_1][node_id_2], c_ij)
+                status = self.nodes_list[node_id_2].add_new_peer(node_id_1, adj_mat[node_id_2][node_id_1], c_ij)
+                if status == True:
+                    break
+        pass
+
     def execute_next_event(self):
         """This will execute all events with event_completion_time==queue.top().event_completion_time"""
         global g_logger
-        event: Event = self.event_queue.pop()
-        if event == False:
+        event_present_in_queue, event = self.event_queue.pop()
+        if event_present_in_queue == False:
             return False
         self.global_time = event.event_completion_time
         while True:
+            g_logger.debug(f'Time={self.get_global_time():.7f} , Event = {event}')
             if event.event_type == EventType.EVENT_TRANSACTION_CREATE:
                 self.nodes_list[event.event_receiver_id].transaction_event_handler()
             elif event.event_type == EventType.EVENT_RECV_TRANSACTION:
@@ -212,11 +262,17 @@ class Transaction:
         self.coin_amount: float = coin_amount
         self.txn_hash: str = self.get_hash()
 
-    def str(self) -> str:
+    def __str__(self) -> str:
         return str([self.txn_time, self.id_sender, self.id_receiver, self.coin_amount])
 
+    def __eq__(self, other) -> bool:
+        return type(self) == type(other) and self.txn_hash == other.txn_hash
+
+    def __hash__(self):
+        return int(self.get_hash(), base=16)
+
     def get_hash(self) -> str:
-        return hashlib.md5(self.str().encode()).hexdigest()
+        return hashlib.md5(str(self).encode()).hexdigest()
 
     @staticmethod
     def size() -> int:
@@ -253,14 +309,17 @@ class Block:
         """
         Hash is calculated based on "self.prev_block_hash", "self.creation_time" and "self.transactions"
         """
-        return hashlib.md5(self.str().encode()).hexdigest()
+        return hashlib.md5(str(self).encode()).hexdigest()
 
-    def str(self) -> str:
+    def __str__(self) -> str:
         """
         NOTE: this does not include block hash
         String of "self.prev_block_hash", "self.creation_time", "self.index" and "self.transaction"
         """
-        return str([self.prev_block_hash, self.creation_time, self.index, self.transactions])
+        return str([self.prev_block_hash, self.creation_time, self.index, [str(txn) for txn in self.transactions]])
+
+    def str_all(self) -> str:
+        return str([self.curr_block_hash, self.prev_block_hash, self.creation_time, self.index, [str(txn) for txn in self.transactions]])
 
     def serialize(self) -> str:
         return str([self.curr_block_hash, self.recv_time, self.prev_block_hash, self.creation_time, self.index,
@@ -314,12 +373,18 @@ class Node:
         # Max transactions a block can store
         self.max_transactions_per_block = sp.max_transactions_per_block
 
-    def add_new_peer(self, new_peer_id: int, node_id: int, rho_ij: float, c_ij: int) -> None:
+        # This is very very important
+        self.mining_inprogress: bool = False
+
+    def add_new_peer(self, new_peer_id: int, rho_ij: float, c_ij: int) -> bool:
         """
         Adding new peer to the neighbors list
         Inserts an edge between this and new_peer in the node graph
         """
+        if new_peer_id in self.neighbors.keys():
+            return False
         self.neighbors[new_peer_id] = Node.NodeSiblingInfo(new_peer_id, rho_ij, c_ij)
+        return True
 
     def remove_peer(self, peer_id: int) -> bool:
         if peer_id not in self.neighbors.keys():
@@ -442,6 +507,8 @@ class Node:
             if node.node_id == senders_id:
                 continue
             self.transaction_send(transaction_obj, node)
+        if self.mining_inprogress == False:
+            self.mining_start()
         pass
 
     def is_block_validate(self, block_obj: Block):
@@ -451,7 +518,14 @@ class Node:
             return False
         if block_obj.prev_block_hash not in self.blocks_all:
             g_logger.warning(f'Block received whose parent is not yet received to this Node')
-            g_logger.warning(f'{self.node_id=} , {block_obj=}')
+            g_logger.warning(f'{self.node_id=} , {block_obj.str_all()=}')
+            g_logger.debug(f'self.blocks_all.keys()   = {list(self.blocks_all.keys())}')
+            g_logger.debug(f'self.blocks_all.values() = {[i.str_all() for i in self.blocks_all.values()]}')
+            for node in self.simulator.nodes_list:
+                if node.blocks_all[node.block_chain_leafs[-1]].index >= block_obj.index:
+                    g_logger.debug(f'\tnode.node_id = {node.node_id}')
+                    g_logger.debug(f'\tnode.blocks_all.keys()   = {[str(i) for i in node.blocks_all.keys()]}')
+                    g_logger.debug(f'\tnode.blocks_all.values() = {[i.str_all() for i in node.blocks_all.values()]}')
         if self.blocks_all[block_obj.prev_block_hash].index + 1 != block_obj.index:
             return False
         for txn in block_obj.transactions[1:]:
@@ -511,42 +585,59 @@ class Node:
                 continue
             idx_insert = i + 1
             break
-        self.block_chain_leafs.insert(idx_insert, block_obj)
+        self.block_chain_leafs.insert(idx_insert, block_obj.curr_block_hash)
         if to_start_new_mining:
             self.mining_start()
         pass
 
     def get_new_transaction_greedy(self, curr_tail: str) -> List[Transaction]:
-        sp: SimulatorParameters = self.simulator.simulator_parameters
-        txn_mining_reward: Transaction = self.blocks_all[curr_tail].transactions[0]
-        if self.blocks_all[curr_tail].index % sp.mining_reward_update_block_time:
-            txn_mining_reward.coin_amount = txn_mining_reward.coin_amount * (1 + sp.mining_reward_update_percent / 100)
         # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
         # if len(self.txn_pool) <= self.max_transactions_per_block - 1:
         #     return copy.deepcopy(self.txn_pool)
-        return [txn_mining_reward] + copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
+        return copy.deepcopy(self.txn_pool[:self.max_transactions_per_block - 1])
 
-    def get_new_block(self) -> Block:
+    def get_new_block(self) -> Tuple[bool, Union[Block, None]]:
         # Point 7 of the PDF
         curr_tail = self.block_chain_leafs[-1]
-        mining_completion_time = self.simulator.get_global_time() \
-                                 + numpy.random.exponential(self.T_k_exp_block_mining_mean)
-        return Block(
+
+        sp: SimulatorParameters = self.simulator.simulator_parameters
+        txn_mining_reward: Union[Transaction, None] = None
+        try:
+            txn_mining_reward: Transaction = Transaction(
+                self.simulator.get_global_time(),
+                -1,
+                self.node_id,
+                sp.mining_reward_start * (
+                        (1 + (sp.mining_reward_update_percent / 100)) **
+                        ((self.blocks_all[curr_tail].index + 1) // sp.mining_reward_update_block_time)
+                )
+            )
+        except Exception as e:
+            g_logger.error(e)
+            g_logger.debug(f'curr_tail       = {type(curr_tail)} {curr_tail}')
+            g_logger.debug(f'self.blocks_all = {type(self.blocks_all)} {[[str(i), str(j)] for i,j in self.blocks_all.items()]}')
+        transactions_to_include = [txn_mining_reward] + self.get_new_transaction_greedy(curr_tail)
+        if len(transactions_to_include) == 1:
+            return False, None
+
+        return True, Block(
             curr_tail,
-            mining_completion_time,
+            self.simulator.get_global_time(),
             self.blocks_all[curr_tail].index + 1,
-            self.get_new_transaction_greedy(curr_tail),
-            mining_completion_time
+            transactions_to_include,
+            self.simulator.get_global_time() + numpy.random.exponential(self.T_k_exp_block_mining_mean)
         )
         pass
 
     def mining_start(self):
-        new_block: Block = self.get_new_block()
-        if len(new_block.transactions) == 0:
+        new_block_status, new_block = self.get_new_block()
+        if new_block_status == 0:
             return False
+        self.mining_inprogress = True
+        self.last_receive_time = new_block.creation_time
         self.simulator.event_queue.push(
             Event(
-                new_block.creation_time,
+                new_block.recv_time,
                 EventType.EVENT_BLOCK_CREATE_SUCCESS,
                 self.node_id,
                 self.node_id,
@@ -560,7 +651,13 @@ class Node:
         # A "Block" which created new longest blockchain was received after the
         # mining started. Hence, we discard this mining complete request because
         # in real life this mining work is to be discarded.
+        self.mining_inprogress = False
         if block.creation_time < self.last_receive_time:
+            g_logger.info(
+                f'Node Id = {self.node_id} , this mining result is to be discarded because we received a '
+                f'new block which makes a longer blockchain after the mining started and before it ended. '
+                f'Mining start time = {block.creation_time:0.5f}, Block receive time = {self.last_receive_time:0.5f}'
+            )
             return
         if self.blocks_all[self.block_chain_leafs[-1]].index > block.index:
             g_logger.warning(
@@ -576,10 +673,22 @@ class Node:
         self.blocks_all[block.curr_block_hash] = block
         self.block_chain_leafs[-1] = block.curr_block_hash
 
+        # Remove processed transactions from the transaction pool
+        # NOTE: we use [1:] because mining reward transaction will not be in the "self.txn_pool"
+        for txn in block.transactions[1:]:
+            try:
+                self.txn_pool.remove(txn)
+            except Exception as e:
+                g_logger.error(e)
+                g_logger.debug(f'txn                = {str(txn)}')
+                g_logger.debug(f'block.transactions = {[str(i) for i in block.transactions]}')
+                g_logger.debug(f'self.txn_pool      = {[str(i) for i in self.txn_pool]}')
+                sys.exit(1)
+
         # Broadcast the "block" to all "self.neighbors"
         for node in self.neighbors.values():
             self.block_send(block, node)
-        pass
+        self.mining_start()
 
     def serialize_blockchain_to_str_v1(self) -> str:
         # TODO: update this if required
@@ -613,6 +722,10 @@ class Event:
         self.event_receiver_id: int = event_receiver_id
         self.data_obj = data_obj
 
+    def __str__(self) -> str:
+        return f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
+               f'{self.event_creator_id}, {self.event_receiver_id}, {self.data_obj})'
+
 
 # REFER: https://docs.python.org/3/library/heapq.html
 # REFER: https://www.geeksforgeeks.org/heap-queue-or-heapq-in-python/
@@ -623,8 +736,10 @@ class EventQueue:
     def push(self, new_event: Event):
         heapq.heappush(self.events, (new_event.event_completion_time, new_event))
 
-    def pop(self) -> Event:
-        return heapq.heappop(self.events)[1]
+    def pop(self) -> Tuple[bool, Union[None, Event]]:
+        if len(self.events) == 0:
+            return False, None
+        return True, heapq.heappop(self.events)[1]
 
     def top(self) -> Union[Event, bool]:
         if len(self.events) == 0:
@@ -640,10 +755,12 @@ def Main(args: Dict):
     mySimulator = Simulator(sp)
     mySimulator.initialize()
     while mySimulator.get_global_time() < sp.execution_time:
+        # g_logger.debug(f'{mySimulator.get_global_time()=}')
         status = mySimulator.execute_next_event()
         if status == False:
             g_logger.info('No events present in the event queue. Exiting...')
             break
+        # input()
     mySimulator.write_all_node_tree_to_file()
 
 
