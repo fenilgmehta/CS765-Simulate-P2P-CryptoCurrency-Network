@@ -846,6 +846,16 @@ class EventQueue:
 
 
 def plot_graph_build(blocks_iter: Iterable[Block], blocks_leafs: List[str] = None) -> Digraph:
+    # REFER: http://magjac.com/graphviz-visual-editor/
+    #       - Playground for testing and immediate results
+    # REFER: https://www.graphviz.org/pdf/dotguide.pdf (Found this from google of "dot language examples")
+    #       - Main doc
+    # REFER: https://stackoverflow.com/questions/49139028/change-subgraph-cluster-shape-to-rounded-rectangle
+    #       - Rounded rectangle
+    # REFER: https://graphviz.org/doc/info/shapes.html#record
+    #       - Content inside a node
+    # REFER: https://ant.design/docs/spec/colors
+    #       - Colors
     if blocks_leafs is not None:
         g_logger.debug(f'Tail Count = {len(blocks_leafs)}')
 
