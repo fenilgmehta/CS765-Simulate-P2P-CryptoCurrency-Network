@@ -11,9 +11,10 @@ import random
 import sys
 import traceback
 from collections import defaultdict
-from typing import List, Dict, Union, Tuple, Set
+from typing import List, Dict, Union, Tuple, Set, Iterable
 
 import coloredlogs
+import joblib
 import numpy
 from graphviz import Digraph
 
@@ -24,6 +25,7 @@ class SimulatorParameters:
     # Parameters in the configuration file (will be read from the file during initialization)
     def __init__(self) -> None:
         self.output_path: str = ''
+        self.simulator_data_filename: str = ''
         self.execution_time: float = 0.0
 
         # Point 1 of PDF: Total Nodes present in the P2P cryptocurrency network
@@ -59,6 +61,7 @@ class SimulatorParameters:
 
         # Read parameters from the config file
         self.output_path: str = os.path.abspath(parameters['output_path'])
+        self.simulator_data_filename: str = parameters['simulator_data_filename']
         os.makedirs(self.output_path, exist_ok=True)
         self.execution_time: float = float(parameters['execution_time'])
 
@@ -169,7 +172,7 @@ class Simulator:
         )
         # Sender = -1 denotes that coins are created from thin air in the genesis block
         transactions = [Transaction(-1, -1, recv_idx, coins) for recv_idx, coins in zip(recv_node_idx, money)]
-        return Block('-1', -1.0, 0, transactions, 0)
+        return Block('-1', 0.0, 0, transactions, 0)
 
     def __create_connected_graph(self):
         # REFER: https://stackoverflow.com/questions/2041517/random-simple-connected-graph-generation-with-given-sparseness
@@ -215,7 +218,10 @@ class Simulator:
             return False
         self.global_time = event.event_completion_time
         while True:
-            g_logger.debug(f'Time={self.get_global_time():.7f} , Event = {event}')
+            # NOTE: the "if" condition is used to reduce the number of log operations
+            #       because transaction send/receive is the most highly performed operation
+            if event.event_type != EventType.EVENT_RECV_TRANSACTION:
+                g_logger.debug(f'Time={self.get_global_time():.7f} , Event = {event}')
             if event.event_type == EventType.EVENT_TRANSACTION_CREATE:
                 self.nodes_list[event.event_receiver_id].transaction_event_handler()
             elif event.event_type == EventType.EVENT_RECV_TRANSACTION:
@@ -423,10 +429,12 @@ class Node:
             d_ij = numpy.random.exponential(96_000 / self.c_ij)
             return self.rho_ij + (message_size_bits / self.c_ij) + d_ij
 
-    def change_mining_branch(self, block_tail_hash_curr: str, block_tail_hash_new: str):
+    def change_mining_branch(self, block_tail_hash_new: str):
         # NOTE: this can be optimized by finding the common ancestor of the
         #       "current tail" on which mining is being done and the "new tail"
         global g_logger
+        # TODO: fix this: when new block is successor of current tail
+        block_tail_hash_curr = self.block_chain_leafs[-1]
         txn_pool_temp: Set[Transaction] = set(self.txn_all.values())
         curr_block_hash: str = self.block_chain_leafs[-1]
         while curr_block_hash != self.GENESIS_BLOCK.curr_block_hash:
@@ -636,7 +644,9 @@ class Node:
         if block_obj.index > self.blocks_all[self.block_chain_leafs[-1]].index:
             to_start_new_mining = True
             self.last_receive_time = current_time
-            self.change_mining_branch(self.block_chain_leafs[-1], block_obj.curr_block_hash)
+            g_logger.info(f'{self.node_id=}, Changing mining branch, '
+                          f'current={block_obj.curr_block_hash}, new={self.block_chain_leafs[-1]}')
+            self.change_mining_branch(block_obj.curr_block_hash)
 
         # Check "self.blocks_unvalidated" and updated "block_obj"
         while True:
@@ -835,73 +845,65 @@ class EventQueue:
         return self.events[0][1]
 
 
-def plot_graph_multi(nodes_list: List[Node], save_to_file: bool, base_path: str, file_name: str = ''):
-    # TODO: update this to work with repetition
-    g = Digraph('blockchain', node_attr={'shape': 'record', 'style': 'rounded,filled', 'fontname': 'Arial'})
-    g.graph_attr['rankdir'] = 'RL'
+def plot_graph_build(blocks_iter: Iterable[Block], blocks_leafs: List[str] = None) -> Digraph:
+    if blocks_leafs is not None:
+        g_logger.debug(f'Tail Count = {len(blocks_leafs)}')
+
     block_point_count: Dict[str, int] = defaultdict(int)
-    for node in nodes_list:
-        for block in node.blocks_all.values():
-            block_point_count[block.prev_block_hash] += 1
-        for block in node.blocks_all.values():
-            point_count = block_point_count[block.curr_block_hash]
-            # REFER: https://stackoverflow.com/questions/5466451/how-can-i-print-literal-curly-brace-characters-in-a-string-and-also-use-format
-            block_label = f'<hash> Hash={block.curr_block_hash[:7]} ' \
-                          f'|<link> Link={block.prev_block_hash[:7]} ' \
-                          f'| Time={block.creation_time:.1f}' \
-                          f'| {{Idx={block.index} | TxnLen={len(block.transactions)}}}'
-            if block.prev_block_hash == '-1':  # it is genesis block, light blue
-                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
-            elif point_count == 0:  # light grey
-                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#d9d9d9'})
-            elif point_count == 1:  # light orange/yellow
-                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#ffd591'})
-            else:  # point_count >= 2, light red
-                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
-        for block in node.blocks_all.values():
-            if block.prev_block_hash == '-1':
-                continue  # do NOTHING for genesis block
-            # g.edge(tail_name=f'{block.curr_block_hash}:link',
-            #        head_name=f'{block.prev_block_hash}:hash',
-            #        _attributes={'weight': '0'})
-            g.edge(tail_name=f'{block.curr_block_hash}', head_name=f'{block.prev_block_hash}')
-
-    if save_to_file:
-        g.view(filename=f'graph_len{len(nodes_list)}_NodeIndex_{nodes_list[0].node_id:03d}', directory=base_path)
-    else:
-        g.view(directory=base_path)
-    g.render()
-
-
-def plot_graph(node: Node, save_to_file: bool, base_path: str, file_name: str = ''):
-    g = Digraph('blockchain', node_attr={'shape': 'record', 'style': 'rounded,filled', 'fontname': 'Arial'})
-    g.graph_attr['rankdir'] = 'RL'
-    block_point_count: Dict[str, int] = defaultdict(int)
-    g_logger.debug(f'Tail Count = {len(node.block_chain_leafs)}')
-    for block in node.blocks_all.values():
+    for block in blocks_iter:
         block_point_count[block.prev_block_hash] += 1
-    for block in node.blocks_all.values():
+
+    g = Digraph('blockchain', node_attr={'shape': 'record', 'style': 'rounded,filled', 'fontname': 'Arial'})
+    g.graph_attr['rankdir'] = 'RL'
+
+    for block in blocks_iter:
         point_count = block_point_count[block.curr_block_hash]
         # REFER: https://stackoverflow.com/questions/5466451/how-can-i-print-literal-curly-brace-characters-in-a-string-and-also-use-format
         block_label = f'<hash> Hash={block.curr_block_hash[:7]} ' \
                       f'|<link> Link={block.prev_block_hash[:7]} ' \
                       f'| Time={block.creation_time:.1f}' \
                       f'| {{Idx={block.index} | TxnLen={len(block.transactions)}}}'
-        if block.prev_block_hash == '-1':  # it is genesis block, light blue
+        # The below statement is used to check if we have any block hashes which are
+        # not leaf blocks but their hashes are present in the leaf blocks list
+        if blocks_leafs is not None and block.curr_block_hash in blocks_leafs:
+            g_logger.debug(f'{block.curr_block_hash=} , {block.prev_block_hash=} , {point_count=}')
+        if block.prev_block_hash == '-1':  # it is genesis block, color=light blue
             g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
-        elif point_count == 0:  # light grey
+        elif point_count == 0:  # leaf node, color=light grey
             g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#d9d9d9'})
-        elif point_count == 1:  # light orange/yellow
+        elif point_count == 1:  # color=light orange/yellow
             g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#ffd591'})
-        else:  # point_count >= 2, light red
-            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
-    for block in node.blocks_all.values():
+        else:  # point_count >= 2, branching happens, color=light red
+            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#ff4d4f'})
+    for block in blocks_iter:
         if block.prev_block_hash == '-1':
             continue  # do NOTHING for genesis block
         # g.edge(tail_name=f'{block.curr_block_hash}:link',
         #        head_name=f'{block.prev_block_hash}:hash',
         #        _attributes={'weight': '0'})
         g.edge(tail_name=f'{block.curr_block_hash}', head_name=f'{block.prev_block_hash}')
+    return g
+
+
+def plot_graph_multi(nodes_list: List[Node], save_to_file: bool, base_path: str, file_name: str = ''):
+    local_blocks_all: Set[Block] = set()
+    for node in nodes_list:
+        local_blocks_all = local_blocks_all.union(set(node.blocks_all.values()))
+
+    g = plot_graph_build(local_blocks_all, None)
+
+    if file_name == '':
+        file_name = f'graph_len{len(nodes_list)}_NodeIndex_{nodes_list[0].node_id:03d}'
+    if save_to_file:
+        g.view(filename=file_name, directory=base_path)
+    else:
+        g.view(directory=base_path)
+    g.render()
+
+
+def plot_graph(node: Node, save_to_file: bool, base_path: str):
+    g = plot_graph_build(node.blocks_all.values(), node.block_chain_leafs)
+
     if save_to_file:
         g.view(filename=os.path.join(base_path, f'graph_NodeIndex_{node.node_id:03d}'))
     else:
@@ -910,21 +912,27 @@ def plot_graph(node: Node, save_to_file: bool, base_path: str, file_name: str = 
 
 
 def simulator_visualization(mySimulator: Simulator):
-    # TODO: allow user to plot combined tree of blockchain by taking union of tree of all nodes
-    # try:
-    #     print('Input format: (0|1 (0|1 [FILE_NAME]))')
-    #     view_options = input(
-    #         'Do you want to view the whole blockchain for each node (0/1), save_to_file(0/1), file_name ?').split()
-    #     if view_options[0] == '1':
-    #         plot_graph_multi(mySimulator.nodes_list, view_options[1] == '1',
-    #                    view_options[2] if len(view_options) == 3 else '')
-    # except Exception as e:
-    #     # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
-    #     g_logger.error(e)
-    #     g_logger.error(traceback.format_exc())
     try:
-        print('Enter the input to VIEW/STORE (0/1) and INDEX (N) of node of the graph on the same line')
-        print('Input format: (^$|(0/1) N)')
+        print()
+        print('Input format: (0|1 (0|1 [FILE_NAME]))')
+        view_options = input('Do you want to view the combined blockchain of all nodes (0/1), '
+                             'save_to_file(0/1), [file_name] : ').split()
+        if view_options[0] == '1':
+            plot_graph_multi(mySimulator.nodes_list,
+                             view_options[1] == '1' if len(view_options) >= 2 else '0',
+                             mySimulator.simulator_parameters.output_path,
+                             view_options[2] if len(view_options) >= 3 else '')
+    except Exception as e:
+        # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
+        g_logger.error(e)
+        g_logger.error(traceback.format_exc())
+    # plot_graph_multi(mySimulator.nodes_list, False, mySimulator.simulator_parameters.output_path)
+
+    try:
+        print()
+        print('Enter the input to VIEW/STORE (0/1) and (all/IndexN) '
+              'of node of the graph on the same line')
+        print('Input format: ^$ , 0 N , 1 (N|all)')
         print('Enter blank line to exit this')
         while view_options := input('Enter: ').split():
             # print(view_options)
@@ -932,11 +940,19 @@ def simulator_visualization(mySimulator: Simulator):
             # if len(view_options) == 0:
             #     break
             if len(view_options) == 2:
-                plot_graph(
-                    mySimulator.nodes_list[int(view_options[1])],
-                    view_options[0] == '1',
-                    mySimulator.simulator_parameters.output_path
-                )
+                if view_options[1] == 'all':
+                    if view_options[0] == 0:
+                        view_options[0] = '1'
+                        g_logger.warning('Saving blockchain tree for all nodes because "all" parameter was passed')
+                    for i in mySimulator.nodes_list:
+                        plot_graph(i, view_options[0] == '1', mySimulator.simulator_parameters.output_path)
+                else:
+                    try:
+                        plot_graph(mySimulator.nodes_list[int(view_options[1])], view_options[0] == '1',
+                                   mySimulator.simulator_parameters.output_path)
+                    except Exception as e:
+                        g_logger.error(e)
+                        g_logger.error(traceback.format_exc())
             else:
                 g_logger.warning('Invalid input')
     except Exception as e:
@@ -961,6 +977,9 @@ def Main(args: Dict):
             break
         # input()
 
+    if sp.simulator_data_filename != '':
+        g_logger.info(f'Saving all the progress of simulator to "{sp.simulator_data_filename}"')
+        joblib.dump(mySimulator, os.path.join(sp.output_path, sp.simulator_data_filename), compress=2)
     mySimulator.write_all_node_tree_to_file()
     simulator_visualization(mySimulator)
 
