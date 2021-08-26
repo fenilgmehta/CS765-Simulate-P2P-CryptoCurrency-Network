@@ -9,10 +9,13 @@ import math
 import os
 import random
 import sys
+import traceback
+from collections import defaultdict
 from typing import List, Dict, Union, Tuple, Set
 
 import coloredlogs
 import numpy
+from graphviz import Digraph
 
 g_logger = None
 
@@ -832,6 +835,117 @@ class EventQueue:
         return self.events[0][1]
 
 
+def plot_graph_multi(nodes_list: List[Node], save_to_file: bool, base_path: str, file_name: str = ''):
+    # TODO: update this to work with repetition
+    g = Digraph('blockchain', node_attr={'shape': 'record', 'style': 'rounded,filled', 'fontname': 'Arial'})
+    g.graph_attr['rankdir'] = 'RL'
+    block_point_count: Dict[str, int] = defaultdict(int)
+    for node in nodes_list:
+        for block in node.blocks_all.values():
+            block_point_count[block.prev_block_hash] += 1
+        for block in node.blocks_all.values():
+            point_count = block_point_count[block.curr_block_hash]
+            # REFER: https://stackoverflow.com/questions/5466451/how-can-i-print-literal-curly-brace-characters-in-a-string-and-also-use-format
+            block_label = f'<hash> Hash={block.curr_block_hash[:7]} ' \
+                          f'|<link> Link={block.prev_block_hash[:7]} ' \
+                          f'| Time={block.creation_time:.1f}' \
+                          f'| {{Idx={block.index} | TxnLen={len(block.transactions)}}}'
+            if block.prev_block_hash == '-1':  # it is genesis block, light blue
+                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
+            elif point_count == 0:  # light grey
+                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#d9d9d9'})
+            elif point_count == 1:  # light orange/yellow
+                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#ffd591'})
+            else:  # point_count >= 2, light red
+                g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
+        for block in node.blocks_all.values():
+            if block.prev_block_hash == '-1':
+                continue  # do NOTHING for genesis block
+            # g.edge(tail_name=f'{block.curr_block_hash}:link',
+            #        head_name=f'{block.prev_block_hash}:hash',
+            #        _attributes={'weight': '0'})
+            g.edge(tail_name=f'{block.curr_block_hash}', head_name=f'{block.prev_block_hash}')
+
+    if save_to_file:
+        g.view(filename=f'graph_len{len(nodes_list)}_NodeIndex_{nodes_list[0].node_id:03d}', directory=base_path)
+    else:
+        g.view(directory=base_path)
+    g.render()
+
+
+def plot_graph(node: Node, save_to_file: bool, base_path: str, file_name: str = ''):
+    g = Digraph('blockchain', node_attr={'shape': 'record', 'style': 'rounded,filled', 'fontname': 'Arial'})
+    g.graph_attr['rankdir'] = 'RL'
+    block_point_count: Dict[str, int] = defaultdict(int)
+    g_logger.debug(f'Tail Count = {len(node.block_chain_leafs)}')
+    for block in node.blocks_all.values():
+        block_point_count[block.prev_block_hash] += 1
+    for block in node.blocks_all.values():
+        point_count = block_point_count[block.curr_block_hash]
+        # REFER: https://stackoverflow.com/questions/5466451/how-can-i-print-literal-curly-brace-characters-in-a-string-and-also-use-format
+        block_label = f'<hash> Hash={block.curr_block_hash[:7]} ' \
+                      f'|<link> Link={block.prev_block_hash[:7]} ' \
+                      f'| Time={block.creation_time:.1f}' \
+                      f'| {{Idx={block.index} | TxnLen={len(block.transactions)}}}'
+        if block.prev_block_hash == '-1':  # it is genesis block, light blue
+            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
+        elif point_count == 0:  # light grey
+            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#d9d9d9'})
+        elif point_count == 1:  # light orange/yellow
+            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#ffd591'})
+        else:  # point_count >= 2, light red
+            g.node(name=block.curr_block_hash, label=block_label, _attributes={'fillcolor': '#40a9ff'})
+    for block in node.blocks_all.values():
+        if block.prev_block_hash == '-1':
+            continue  # do NOTHING for genesis block
+        # g.edge(tail_name=f'{block.curr_block_hash}:link',
+        #        head_name=f'{block.prev_block_hash}:hash',
+        #        _attributes={'weight': '0'})
+        g.edge(tail_name=f'{block.curr_block_hash}', head_name=f'{block.prev_block_hash}')
+    if save_to_file:
+        g.view(filename=os.path.join(base_path, f'graph_NodeIndex_{node.node_id:03d}'))
+    else:
+        g.view(directory=base_path)
+    g.render()
+
+
+def simulator_visualization(mySimulator: Simulator):
+    # TODO: allow user to plot combined tree of blockchain by taking union of tree of all nodes
+    # try:
+    #     print('Input format: (0|1 (0|1 [FILE_NAME]))')
+    #     view_options = input(
+    #         'Do you want to view the whole blockchain for each node (0/1), save_to_file(0/1), file_name ?').split()
+    #     if view_options[0] == '1':
+    #         plot_graph_multi(mySimulator.nodes_list, view_options[1] == '1',
+    #                    view_options[2] if len(view_options) == 3 else '')
+    # except Exception as e:
+    #     # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
+    #     g_logger.error(e)
+    #     g_logger.error(traceback.format_exc())
+    try:
+        print('Enter the input to VIEW/STORE (0/1) and INDEX (N) of node of the graph on the same line')
+        print('Input format: (^$|(0/1) N)')
+        print('Enter blank line to exit this')
+        while view_options := input('Enter: ').split():
+            # print(view_options)
+            # This is not needed because bool value of empty list if False
+            # if len(view_options) == 0:
+            #     break
+            if len(view_options) == 2:
+                plot_graph(
+                    mySimulator.nodes_list[int(view_options[1])],
+                    view_options[0] == '1',
+                    mySimulator.simulator_parameters.output_path
+                )
+            else:
+                g_logger.warning('Invalid input')
+    except Exception as e:
+        # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
+        g_logger.error(e)
+        g_logger.error(traceback.format_exc())
+    pass
+
+
 def Main(args: Dict):
     global g_logger
     sp = SimulatorParameters()
@@ -846,7 +960,10 @@ def Main(args: Dict):
             g_logger.info('No events present in the event queue. Exiting...')
             break
         # input()
+
     mySimulator.write_all_node_tree_to_file()
+    simulator_visualization(mySimulator)
+
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
 
