@@ -10,6 +10,7 @@ import os
 import random
 import sys
 import traceback
+import networkx as nx
 from collections import defaultdict
 from typing import List, Dict, Union, Tuple, Set, Iterable
 
@@ -45,7 +46,6 @@ class SimulatorParameters:
         self.mining_reward_start = 50
         self.mining_reward_update_percent = -50
         self.mining_reward_update_block_time = 2016
-        self.graph_connectivity_strength_percent = 100
 
         self.number_of_slow_nodes: int = 0
         self.number_of_fast_nodes: int = 0
@@ -87,8 +87,6 @@ class SimulatorParameters:
         self.mining_reward_update_percent = parameters['mining_reward_update_percent']
         self.mining_reward_update_block_time = parameters['mining_reward_update_block_time']
 
-        self.graph_connectivity_strength_percent = parameters['graph_connectivity_strength_percent']
-
         # ---
         # z% nodes are slow
         self.number_of_slow_nodes: int = int(self.z_percent_slow_nodes * self.n_total_nodes) // 100
@@ -122,8 +120,6 @@ class SimulatorParameters:
         print(f'Mining reward start             = {self.mining_reward_start}')
         print(f'Mining reward update percent    = {self.mining_reward_update_percent}')
         print(f'Mining reward update block time = {self.mining_reward_update_block_time}')
-        print()
-        print(f'Graph Connectivity Strength     = {self.graph_connectivity_strength_percent} %')
         print()
 
 
@@ -175,40 +171,41 @@ class Simulator:
         return Block('-1', 0.0, 0, transactions, 0)
 
     def __create_connected_graph(self):
+        # REFER: https://www.scitepress.org/Papers/2014/49373/49373.pdf  
         # REFER: https://stackoverflow.com/questions/2041517/random-simple-connected-graph-generation-with-given-sparseness
         # REFER: https://stackoverflow.com/questions/6667201/how-to-define-a-two-dimensional-array
+        # REFER: https://networkx.org/documentation/networkx-1.9.1/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html
+        # REFER: https://www.geeksforgeeks.org/barabasi-albert-graph-scale-free-models/
+
+        # TODO: 1. Remove graph connectivity strength percentage parameter
+
+        # Total nodes in the graph
         n: int = self.simulator_parameters.n_total_nodes
+        
+        # Creating the barabasi albert graph for 'n' nodes
+        g: nx.classes.graph.Graph = nx.barabasi_albert_graph(n, random.randint(1, 10) if n > 10 else random.randint(1, int(max(1, n - 1))))
+
         adj_mat: List[List[int]] = [[0 for i in range(n)] for j in range(n)]  # Stores ρ_ij, this is NOT symmetric
         for i in range(n):
             for j in range(n):
                 # Point 5 of the PDF
                 adj_mat[i][j] = numpy.random.randint(10, 500) / 1000  # Time is stored in Seconds
-        edges: int = (n * (n + 1)) // 2
-        edges = (n - 1) + ((edges - (n - 1)) * self.simulator_parameters.graph_connectivity_strength_percent) // 100
-        for i in range(1, n):
-            while True:
-                peer_node_id: int = numpy.random.randint(0, i)  # generates "0" to "i-1" randomly
-                c_ij = 5 * 1_000_000  # IF any one of the node is SLOW
-                if self.nodes_list[i].is_network_fast and self.nodes_list[peer_node_id].is_network_fast:
-                    c_ij = 100 * 1_000_000  # IF both the nodes are FAST
-                status = self.nodes_list[i].add_new_peer(peer_node_id, adj_mat[i][peer_node_id], c_ij)
-                status = self.nodes_list[peer_node_id].add_new_peer(i, adj_mat[peer_node_id][i], c_ij)
-                if status == True:
-                    break
-        for i in range(edges - (n - 1)):
-            while True:
-                node_id_1: int = numpy.random.randint(0, n)  # generates "0" to "i-1" randomly
-                node_id_2: int = numpy.random.randint(0, n)  # generates "0" to "i-1" randomly
-                if node_id_1 == node_id_2:
-                    continue
-                c_ij = 5 * 1_000_000  # IF any one of the node is SLOW
-                if self.nodes_list[node_id_1].is_network_fast and self.nodes_list[node_id_2].is_network_fast:
-                    c_ij = 100 * 1_000_000  # IF both the nodes are FAST
-                status = self.nodes_list[node_id_1].add_new_peer(node_id_2, adj_mat[node_id_1][node_id_2], c_ij)
-                status = self.nodes_list[node_id_2].add_new_peer(node_id_1, adj_mat[node_id_2][node_id_1], c_ij)
-                if status == True:
-                    break
-        pass
+        
+        for edge in g.edges():
+            node_i_id: int = edge[0]
+            node_j_id: int = edge[1]
+            
+            # If any of the nodes is SLOW
+            c_ij = 5 * 1_000_000
+
+            if self.nodes_list[node_i_id].is_network_fast and self.nodes_list[node_j_id].is_network_fast:
+                # If both of the nodes are FAST
+                c_ij = 100 * 1_000_000
+
+            # Add node 'j' to the peer list of node 'i'
+            self.nodes_list[node_i_id].add_new_peer(node_j_id, adj_mat[node_i_id][node_j_id], c_ij)
+            # Add node 'i' to the peer list of node 'j'
+            self.nodes_list[node_j_id].add_new_peer(node_i_id, adj_mat[node_j_id][node_i_id], c_ij)
 
     def execute_next_event(self):
         """This will execute all events with event_completion_time==queue.top().event_completion_time"""
