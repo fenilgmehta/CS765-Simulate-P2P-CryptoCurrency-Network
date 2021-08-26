@@ -177,8 +177,6 @@ class Simulator:
         # REFER: https://networkx.org/documentation/networkx-1.9.1/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html
         # REFER: https://www.geeksforgeeks.org/barabasi-albert-graph-scale-free-models/
 
-        # TODO: 1. Remove graph connectivity strength percentage parameter
-
         # Total nodes in the graph
         n: int = self.simulator_parameters.n_total_nodes
         
