@@ -1,7 +1,7 @@
 {
   "output_path": "./blockchains/",
   "simulator_data_filename": "mySimulator.pkl",
-  "execution_time": "100",
+  "execution_time": "1000",
   "n_total_nodes": 20,
   "z_percent_slow_nodes": 40,
   "T_tx_exp_txn_interarrival_mean_sec": 20,
@@ -14,6 +14,5 @@
   "max_transactions_per_block": 1000,
   "mining_reward_start": 50,
   "mining_reward_update_percent": 0,
-  "mining_reward_update_block_time": 2016,
-  "graph_connectivity_strength_percent": 50
+  "mining_reward_update_block_time": 2016
 }
