@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import copy
 import enum
 import hashlib
 import heapq
@@ -9,6 +8,7 @@ import math
 import os
 import random
 import sys
+import time
 import traceback
 from collections import defaultdict
 from typing import List, Dict, Union, Tuple, Set, Iterable
@@ -161,7 +161,7 @@ class Simulator:
         self.freeze_everything_except_network: bool = False
         pass
 
-    def initialize(self):
+    def initialize(self) -> None:
         # GENESIS_BLOCK = self.__create_genesis_block()
         GENESIS_BLOCK = self.__create_genesis_block_v2_empty()
         list_slow_fast: List[bool] = ([False] * self.simulator_parameters.number_of_slow_nodes) \
@@ -176,7 +176,7 @@ class Simulator:
 
         # Create the nodes
         self.nodes_list = [
-            Node(i, self, GENESIS_BLOCK, i_slow_fast, i_malicious)
+            Node(i, self, i_slow_fast, i_malicious, GENESIS_BLOCK)
             for i, (i_slow_fast, i_malicious) in enumerate(zip(list_slow_fast, list_malicious))
         ]
 
@@ -192,7 +192,7 @@ class Simulator:
         pass
 
     # REFER: https://www.geeksforgeeks.org/private-methods-in-python/
-    def __create_genesis_block_v1(self):
+    def __create_genesis_block_v1(self) -> 'Block':
         """This method shall only be called during the start of the simulation"""
         min_of_block_limit_and_nodes = min(self.simulator_parameters.n_total_nodes,
                                            self.simulator_parameters.max_transactions_per_block)
@@ -220,11 +220,11 @@ class Simulator:
         transactions = [Transaction(0.0, -1, recv_idx, coins) for recv_idx, coins in zip(recv_node_idx, money)]
         return Block('-1', 0.0, 0, transactions, 0.0, 0.0)
 
-    def __create_genesis_block_v2_empty(self):
+    def __create_genesis_block_v2_empty(self) -> 'Block':
         """This method shall only be called during the start of the simulation"""
         return Block('-1', 0.0, 0, list(), 0.0, 0.0)
 
-    def __create_connected_graph(self):
+    def __create_connected_graph(self) -> None:
         """Point 4 of the PDF: create a connected network of nodes"""
         # REFER: https://www.scitepress.org/Papers/2014/49373/49373.pdf  
         # REFER: https://networkx.org/documentation/networkx-1.9.1/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html
@@ -274,31 +274,36 @@ class Simulator:
         nx.draw(g, with_labels=True)
         plt.show()
 
-    def freeze(self):
+    def freeze(self) -> None:
         self.freeze_everything_except_network = True
         # self.event_queue.freeze()
 
-    def execute_next_event(self):
+    def execute_next_event(self, execute_all_same_time_events: bool = True) -> bool:
         """This will execute all events with event_completion_time==queue.top().event_completion_time"""
         global g_logger
-        event_present_in_queue, event = self.event_queue.pop()
-        if event_present_in_queue == False:
+        if self.event_queue.empty():
+            g_logger.debug(f'Event queue is empty, returning...')
             return False
-        self.global_time = event.event_completion_time
+
+        event = self.event_queue.pop()
         while True:
-            # NOTE: the "if" condition is used to reduce the number of log operations
-            #       because transaction send/receive is the most highly performed operation
+            self.global_time = event.event_completion_time
+            # NOTE: the "if" condition is used to reduce the number of redundant log operations
             if self.freeze_everything_except_network:
                 if event.event_type in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_BLOCK_CREATE_SUCCESS]:
-                    g_logger.debug(f'FREEZED: Time={self.get_global_time():.7f} , Event = {event}')
+                    g_logger.debug(f'FREEZED: Time={self.get_global_time():.5f} , Event = {event}')
                     break
                 else:
-                    g_logger.debug(f'Network: Time={self.get_global_time():.7f} , Event = {event}')
+                    g_logger.debug(f'Network: Time={self.get_global_time():.5f} , Event = {event}')
             elif event.event_type != EventType.EVENT_RECV_TRANSACTION:
-                g_logger.debug(f'Time={self.get_global_time():.7f} , Event = {event}')
+                # NOTE: EventType.EVENT_RECV_TRANSACTION are not logged because they create a
+                #       lot of log statements (as they are the most highly performed operations)
+                #       and are of no use during debugging
+                g_logger.debug(f'Time={self.get_global_time():.5f} , Event = {event}')
 
             if event.event_type == EventType.EVENT_TRANSACTION_CREATE:
-                self.nodes_list[event.event_receiver_id].transaction_event_handler()
+                txn: Transaction = event.data_obj
+                self.nodes_list[event.event_receiver_id].transaction_event_handler(txn)
             elif event.event_type == EventType.EVENT_RECV_TRANSACTION:
                 txn: Transaction = event.data_obj
                 self.nodes_list[event.event_receiver_id].transaction_recv(txn, event.event_creator_id)
@@ -309,20 +314,23 @@ class Simulator:
                 blk: Block = event.data_obj
                 self.nodes_list[event.event_receiver_id].mining_complete(blk)
             else:
-                g_logger.warning(f'Unexpected EventType={event.event_type} , {event=}')
-            if self.event_queue.top() == False or self.event_queue.top().event_completion_time > self.global_time:
+                g_logger.error(f'Problem: Unexpected EventType={event.event_type} , {event=}')
+
+            if execute_all_same_time_events == False or \
+                    self.event_queue.empty() or \
+                    self.event_queue.top().event_completion_time > self.global_time:
                 break
             event = self.event_queue.pop()
         return True
 
-    def get_global_time(self):
+    def get_global_time(self) -> float:
         return self.global_time
 
     def write_all_node_tree_to_file(self):
         for node in self.nodes_list:
             self.write_node_tree_to_file(
                 node_obj=node,
-                file_name=f'{self.simulator_parameters.output_path}/tree_{node.node_id}'
+                file_name=f'{self.simulator_parameters.output_path}/tree_{node.node_id:03d}'
             )
         pass
 
@@ -336,6 +344,7 @@ class Simulator:
             i += 1
         with open(temp_name, 'w+') as f:
             f.write(node_obj.serialize_blockchain_to_str_v1())
+            g_logger.info(f'Successfully written to file_name="{file_name}"')
         pass
 
 
@@ -345,6 +354,7 @@ class Transaction:
         self.id_sender: int = id_sender
         self.id_receiver: int = id_receiver
         self.coin_amount: float = coin_amount
+        # Note: this is not used much in this simulator. However, it is very useful in real life
         self.txn_hash: str = self.get_hash()
 
     def __str__(self) -> str:
@@ -382,12 +392,6 @@ class Block:
         self.recv_time: float = recv_time  # Time when the block was received
         self.mine_time: float = mine_time  # Time when the this block was successfully mined
 
-    def get_hash(self) -> str:
-        """
-        Hash is calculated based on "self.prev_block_hash", "self.creation_time" and "self.transactions"
-        """
-        return hashlib.md5(str(self).encode()).hexdigest()
-
     def __str__(self) -> str:
         """
         NOTE: this does not include block hash
@@ -396,18 +400,14 @@ class Block:
         return str([self.prev_block_hash, self.creation_time, self.index, [str(i) for i in self.transactions]])
 
     def str_all(self) -> str:
-        return str([self.curr_block_hash, self.prev_block_hash, self.creation_time, self.index,
-                    [str(txn) for txn in self.transactions]])
+        return str([self.curr_block_hash, self.recv_time,  # These both are not present in __str__
+                    self.prev_block_hash, self.creation_time, self.index, [str(i) for i in self.transactions]])
 
-    def serialize(self) -> str:
-        return str([
-            self.curr_block_hash,  # This is not present in __str__
-            self.recv_time,  # This is not present in __str__
-            self.prev_block_hash,
-            self.creation_time,
-            self.index,
-            [str(i) for i in self.transactions]
-        ])
+    def get_hash(self) -> str:
+        """
+        Hash is calculated based on "self.prev_block_hash", "self.creation_time" and "self.transactions"
+        """
+        return hashlib.md5(str(self).encode()).hexdigest()
 
     def size(self) -> int:
         # REFER: https://stackoverflow.com/questions/14329794/get-size-in-bytes-needed-for-an-integer-in-python
@@ -423,8 +423,8 @@ class Block:
 class Node:
     """Structure of a node on the P2P network"""
 
-    def __init__(self, node_id: int, simulator: Simulator, GENESIS_BLOCK: Block, is_network_fast: bool,
-                 is_malicious: bool):
+    def __init__(self, node_id: int, simulator: Simulator, is_network_fast: bool, is_malicious: bool,
+                 GENESIS_BLOCK: Block):
         self.node_id = node_id
         self.simulator: Simulator = simulator
         self.is_network_fast = is_network_fast
@@ -432,16 +432,16 @@ class Node:
 
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
-        # The time at which a new block with chain lenght > local chain length is received
-        self.last_receive_time: int = -1
+        # The time at which a new block with chain length > local chain length is received
+        self.last_receive_time: float = -1.0
 
-        self.txn_all: Dict[str, Transaction] = dict()
+        self.txn_all: Dict[str, Transaction] = dict()  # Hash -> Transaction
         self.txn_pool: List[Transaction] = list()
 
         self.GENESIS_BLOCK = GENESIS_BLOCK
-        self.blocks_all: Dict[str, Block] = {GENESIS_BLOCK.curr_block_hash: GENESIS_BLOCK}
-        self.blocks_unvalidated: Dict[str, Tuple[int, Block]] = dict()
-        self.block_chain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
+        self.blocks_all: Dict[str, Block] = {GENESIS_BLOCK.curr_block_hash: GENESIS_BLOCK}  # Hash -> Block
+        self.blocks_unvalidated: Dict[str, Tuple[int, Block]] = dict()  # Hash -> (Sender, Block)
+        self.blockchain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         sp: SimulatorParameters = simulator.simulator_parameters
 
@@ -500,7 +500,7 @@ class Node:
         #       "current tail" on which mining is being done and the "new tail"
         global g_logger
 
-        block_tail_hash_old = self.block_chain_leafs[-1]
+        block_tail_hash_old = self.blockchain_leafs[-1]
         # if block_tail_hash_old == self.blocks_all[block_tail_hash_new].prev_block_hash:
         #     for txn in self.blocks_all[block_tail_hash_new].transactions:
         #         self.txn_pool.remove(txn)
@@ -519,10 +519,15 @@ class Node:
         while ancestor_hash_old != ancestor_hash_new:
             ancestor_hash_old = self.blocks_all[ancestor_hash_old].prev_block_hash
             ancestor_hash_new = self.blocks_all[ancestor_hash_new].prev_block_hash
+        # Now, "ancestor_hash_old" and "ancestor_hash_new" point to the common ancestor
 
         # Add transactions of old branch to the transaction pool
         while ancestor_hash_old != block_tail_hash_old:
-            self.txn_pool.extend(self.blocks_all[block_tail_hash_old].transactions)
+            # Be careful, First txn is Mining Reward
+            if self.blocks_all[block_tail_hash_old].transactions[0].id_sender == -1:
+                self.txn_pool.extend(self.blocks_all[block_tail_hash_old].transactions[1:])
+            else:
+                self.txn_pool.extend(self.blocks_all[block_tail_hash_old].transactions)
             block_tail_hash_old = self.blocks_all[block_tail_hash_old].prev_block_hash
         # Remove included transactions from the transaction pool
         while ancestor_hash_new != block_tail_hash_new:
@@ -541,7 +546,7 @@ class Node:
             block_tail_hash_new = self.blocks_all[block_tail_hash_new].prev_block_hash
         pass
 
-    def is_transaction_validate(
+    def is_transaction_valid(
             self,
             transaction_obj: Transaction,
             curr_tail: Union[str, None] = None,
@@ -555,9 +560,12 @@ class Node:
         if transaction_obj.coin_amount < 0.0:
             return False
 
+        if transaction_obj.id_sender < 0:
+            return False
+
         curr_blockchain_hash: Union[str, None] = curr_tail
         if curr_blockchain_hash is None:
-            curr_blockchain_hash = self.block_chain_leafs[-1]
+            curr_blockchain_hash = self.blockchain_leafs[-1]
 
         senders_balance: float = senders_balance_init
         while curr_blockchain_hash != self.GENESIS_BLOCK.prev_block_hash:
@@ -571,30 +579,13 @@ class Node:
                     senders_balance += txn.coin_amount
             curr_blockchain_hash = self.blocks_all[curr_blockchain_hash].prev_block_hash
         if senders_balance < 0.0:
-            g_logger.error(f'Processing Node = {self.node_id}')
-            g_logger.error(f'senders_balance = {senders_balance}')
-            g_logger.error(f'Blockchain tail = {self.block_chain_leafs[-1]}')
-            g_logger.error(f'The blockchain has -ve balance for transaction = {transaction_obj}')
+            g_logger.error(f'-ve balance ---> node_id={self.node_id}, senders_balance = {senders_balance}, '
+                           f'Blockchain tail = {self.blockchain_leafs[-1]}, transaction = {transaction_obj}')
             # TODO: do more verbose logging
         return senders_balance >= transaction_obj.coin_amount
 
-    def transaction_create(self):
-        """Point 2 of the PDF: Generate Transaction and add it to the event queue"""
-        next_txn_gen_event_delay = numpy.random.exponential(
-            self.T_tx_exp_txn_interarrival_mean_sec
-        )
-        self.simulator.event_queue.push(
-            Event(
-                self.simulator.get_global_time() + next_txn_gen_event_delay,
-                EventType.EVENT_TRANSACTION_CREATE,
-                self.node_id,
-                self.node_id,
-                None
-            )
-        )
-
     def get_balance(self, node_id, tail_block) -> float:
-        # g_logger.debug(f'{self.block_chain_leafs=}')
+        # g_logger.debug(f'{self.blockchain_leafs=}')
         # g_logger.debug(f'{node_id=} , {tail_block=}')
         balance: float = 0.0
         while tail_block != '-1':
@@ -606,28 +597,53 @@ class Node:
             tail_block = self.blocks_all[tail_block].prev_block_hash
         return balance
 
-    def transaction_event_handler(self):
+    def transaction_create(self):
         """
-        - Randomly Select a node for receiver
-        - Coin Amount : generate randomly
+        Point 2 of the PDF: Generate Transaction and add it to the event queue
+          - Randomly Select a node for receiver
+          - Coin Amount : generate randomly based on current balance
         """
-        txn_receiver: Node = random.choice([node for node in self.simulator.nodes_list if node.node_id != self.node_id])
-        txn_amount: float = round(random.uniform(0, self.get_balance(self.node_id, self.block_chain_leafs[-1])), 2)
+        txn_receiver: int = random.choice(
+            [node.node_id for node in self.simulator.nodes_list if node.node_id != self.node_id]
+        )
+        txn_amount: float = round(random.uniform(0, self.get_balance(self.node_id, self.blockchain_leafs[-1])), 2)
         txn_obj: Transaction = Transaction(
             self.simulator.get_global_time(),
             self.node_id,
-            txn_receiver.node_id,
+            txn_receiver,
             txn_amount
         )
 
-        if self.is_transaction_validate(txn_obj):
-            self.txn_pool.append(txn_obj)
-            self.txn_all[txn_obj.txn_hash] = txn_obj
-        # NOTE: even invalid transactions are send to neighbors to prove that other
-        #       peers are working properly they will discard invalid received data
-        for node in self.neighbors.values():
-            self.transaction_send(txn_obj, node)
+        next_txn_gen_event_delay = numpy.random.exponential(
+            self.T_tx_exp_txn_interarrival_mean_sec
+        )
+        self.simulator.event_queue.push(
+            Event(
+                self.simulator.get_global_time() + next_txn_gen_event_delay,
+                EventType.EVENT_TRANSACTION_CREATE,
+                self.node_id,
+                self.node_id,
+                txn_obj
+            )
+        )
 
+    def transaction_event_handler(self, txn_obj: Transaction):
+        global g_logger
+        if txn_obj.txn_hash in self.txn_all.keys():
+            g_logger.warning(f'Problem: Transaction generated with hash same as previous txn, {txn_obj=}')
+        else:
+            # if self.is_transaction_valid(txn_obj):
+            #     self.txn_all[txn_obj.txn_hash] = txn_obj
+            #     self.txn_pool.append(txn_obj)
+            # # NOTE: even invalid transactions are sent to neighbors to prove that other
+            # #       peers are working properly and they will discard invalid received data
+            pass
+            # NOTE: txn is valid/invalid only when it is put in a block because balance
+            #       of the sender can change before it is included in any block
+            self.txn_all[txn_obj.txn_hash] = txn_obj
+            self.txn_pool.append(txn_obj)
+            for node in self.neighbors.values():
+                self.transaction_send(txn_obj, node)
         self.transaction_create()
 
     def transaction_send(self, transaction_obj: Transaction, receiver_node: NodeSiblingInfo):
@@ -650,11 +666,15 @@ class Node:
         # IF I have already received the transaction; THEN I drop it
         if transaction_obj.txn_hash in self.txn_all:
             return
-        # IF transaction is invalid; then I drop it
-        if self.is_transaction_validate(transaction_obj) == False:
+        # NOTE: transaction should only be validated when putting in a block
+        # # IF transaction is invalid; then I drop it
+        # if self.is_transaction_valid(transaction_obj) == False:
+        #     return
+        if transaction_obj.id_sender <= -1 or transaction_obj.coin_amount < 0:
             return
-        # Store the block and forward it to others
+        # Store the transaction, add it to txn pool and forward it to others
         self.txn_all[transaction_obj.txn_hash] = transaction_obj
+        self.txn_pool.append(transaction_obj)
         for node in self.neighbors.values():
             # Do NOT send the transaction back to the node from which it was received
             if node.node_id == senders_id:
@@ -662,7 +682,7 @@ class Node:
             self.transaction_send(transaction_obj, node)
         pass
 
-    def is_block_validate(self, block_obj: Block) -> int:
+    def is_block_valid(self, block_obj: Block) -> int:
         """
         NOTE: first transaction of all blocks SHOULD ONLY be mining reward transaction
         :returns -1 to denote "False", 0 to denote "can not say", 1 to denote "True"
@@ -678,12 +698,14 @@ class Node:
             return -1
 
         if block_obj.prev_block_hash not in self.blocks_all:
-            g_logger.warning(f'Block received whose parent is not yet received to this Node')
+            g_logger.warning(f'Block received whose parent is not yet received to this Node, '
+                             f'time={self.simulator.get_global_time()}, '
+                             f'node_id={self.node_id}, blk_hash={block_obj.curr_block_hash}')
             # g_logger.warning(f'{self.node_id=} , {block_obj.str_all()=}')
             # g_logger.debug(f'self.blocks_all.keys()   = {list(self.blocks_all.keys())}')
             # g_logger.debug(f'self.blocks_all.values() = {[i.str_all() for i in self.blocks_all.values()]}')
             # for node in self.simulator.nodes_list:
-            #     if node.blocks_all[node.block_chain_leafs[-1]].index >= block_obj.index:
+            #     if node.blocks_all[node.blockchain_leafs[-1]].index >= block_obj.index:
             #         g_logger.debug(f'\tnode.node_id = {node.node_id}')
             #         g_logger.debug(f'\tnode.blocks_all.keys()   = {[str(i) for i in node.blocks_all.keys()]}')
             #         g_logger.debug(f'\tnode.blocks_all.values() = {[i.str_all() for i in node.blocks_all.values()]}')
@@ -691,18 +713,23 @@ class Node:
 
         # Check creation time of the received block
         if block_obj.creation_time >= (
-                self.blocks_all[block_obj.prev_block_hash].creation_time
+                self.simulator.get_global_time()
                 + self.simulator.simulator_parameters.max_block_creation_delay_sec
         ):
-            g_logger.warning(f'Problem: Block Creation Time > LastBlock+max_block_creation_delay_sec')
+            g_logger.warning(f'Problem: Block: Block Creation Time > currTime+max_block_creation_delay_sec')
             g_logger.debug(f'{block_obj.str_all()=}')
             return -1
 
         # Index of received block is invalid
         if self.blocks_all[block_obj.prev_block_hash].index + 1 != block_obj.index:
+            g_logger.debug(f'Block: Invalid index block_obj={block_obj}, '
+                           f'parent={self.blocks_all[block_obj.prev_block_hash]}')
             return -1
 
         # Miner may or may not want to take any reward
+        if block_obj.transactions[0].id_sender < -1:
+            g_logger.debug(f'Block: Invalid Mining Reward sender_id={block_obj.transactions[0]}')
+            return -1  # Only -1 can be used for senders field in a Mining Reward transaction
         if block_obj.transactions[0].id_sender == -1:
             # Ensure mining fee is right
             c = block_obj.transactions[0].coin_amount
@@ -714,8 +741,10 @@ class Node:
                          )
             # REFER: https://stackoverflow.com/questions/5595425/what-is-the-best-way-to-compare-floats-for-almost-equality-in-python
             if not math.isclose(c, c_expected):
+                g_logger.warning(f'Problem: Block: Invalid transaction fee, Expected={c_expected}, Used={c}')
                 return -1
-        elif self.is_transaction_validate(block_obj.transactions[0]) == False:
+        elif self.is_transaction_valid(block_obj.transactions[0]) == False:
+            g_logger.debug(f'Block: Invalid First Transaction txn={block_obj.transactions[0]}')
             return -1
 
         senders_balance: Dict[str, float] = defaultdict(float)
@@ -724,11 +753,13 @@ class Node:
             senders_balance[block_obj.transactions[0].id_sender] -= block_obj.transactions[0].coin_amount
         for txn in block_obj.transactions[1:]:
             if txn.id_sender == -1:
+                g_logger.debug(f'Block: Only first transaction can be mining reward transaciton')
                 return -1  # Only FIRST transaction can be mining reward transaction
+            if not self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
+                g_logger.debug(f'Block: Invalid transaction txn={txn}')
+                return -1
             senders_balance[txn.id_sender] -= txn.coin_amount
             senders_balance[txn.id_receiver] += txn.coin_amount
-            if not self.is_transaction_validate(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
-                return -1
         return 1
 
     def block_send(self, block_obj: Block, receiver_node: NodeSiblingInfo):
@@ -752,24 +783,27 @@ class Node:
                     continue
                 self.block_send(m_block_obj, m_node)
 
-        # set the block receive time
-        block_obj.recv_time = current_time
-
         # IF I have already received the block; THEN I drop it
         if block_obj.curr_block_hash in self.blocks_all:
             return
 
+        # set the block receive time
+        block_obj.recv_time = current_time
+
         # TODO: decide what to do about this, I think the block should not be dropped
         # # IF block_obj.index < max value of current blockchain length; THEN I drop it
-        # if block_obj.index < self.blocks_all[self.block_chain_leafs[-1]].index:
+        # if block_obj.index < self.blocks_all[self.blockchain_leafs[-1]].index:
         #     return
 
-        block_status: int = self.is_block_validate(block_obj)
+        block_status: int = self.is_block_valid(block_obj)
         # IF block is invalid; then I drop it
         if block_status == -1:
+            g_logger.warning(f'Problem: Invalid block received')
             return
         # IF parent of the block is not received; then put it in unvalidated blocks list
         if block_status == 0:
+            g_logger.warning(f'Received block cannot be validated because its predecessor is not yet received, '
+                             f'node_id={self.node_id}, block={block_obj}')
             self.blocks_unvalidated[block_obj.curr_block_hash] = (senders_id, block_obj,)
             return
 
@@ -784,68 +818,95 @@ class Node:
                 if block_obj.curr_block_hash != blk_obj.prev_block_hash:
                     continue
                 # We have already received a successor of the received node
-                if self.is_block_validate(blk_obj) == 1:
+                if self.is_block_valid(blk_obj) == 1:
+                    # block is valid
+                    end_while_loop = False
                     block_obj = blk_obj
                     self.blocks_all[blk_hash] = blk_obj
                     m_block_send_all_except(blk_obj, blk_sender_id)
-                    end_while_loop = False
-                    g_logger.info(f'Successfully processed an unvalidated block :)')
+                    g_logger.info(f'node_id={self.node_id}, '
+                                  f'Successfully processed an unvalidated block block={blk_obj}')
+                    self.blocks_unvalidated.pop(blk_hash)
                 else:
+                    # block is invalid, pop all blocks which have this block as the ancestor
                     end_while_loop = True
-                self.blocks_unvalidated.pop(blk_hash)
+                    successors_1: Set[str] = {blk_hash}
+                    successors_2: Set[str] = set()
+                    while len(successors_1) != 0:
+                        for i in successors_1:
+                            successors_2.union(set(filter(
+                                lambda x: self.blocks_all[x].prev_block_hash == i,
+                                self.blocks_unvalidated
+                            )))
+                        for i in successors_1:
+                            self.blocks_unvalidated.pop(i)
+                        successors_1 = successors_2
+                        successors_2 = set()
+                    pass
                 break
             if end_while_loop:
                 break
 
         to_start_new_mining = False
-        if block_obj.index > self.blocks_all[self.block_chain_leafs[-1]].index:
+        if block_obj.index > self.blocks_all[self.blockchain_leafs[-1]].index:
             to_start_new_mining = True
             self.last_receive_time = current_time
             g_logger.info(f'{self.node_id=}, Changing mining branch, '
-                          f'new={block_obj.curr_block_hash}, current={self.block_chain_leafs[-1]}')
+                          f'new={block_obj.curr_block_hash}, current={self.blockchain_leafs[-1]}')
             self.change_mining_branch(block_obj.curr_block_hash)
+            # Insert the block_obj into self.blockchain_leafs
+            self.blockchain_leafs.append(block_obj.curr_block_hash)
 
-        # Insert the block_obj into self.block_chain_leafs
-        idx_insert = 0
-        for i in range(len(self.block_chain_leafs) - 1, -1, -1):  # "i" goes from "N-1" to "0"
-            # NOTE: Mostly, the less than condition will never be true in our simulation
-            #       However, it can be true in real life
-            if block_obj.index <= self.blocks_all[self.block_chain_leafs[i]].index:
-                continue
-            idx_insert = i + 1
-            break
-        self.block_chain_leafs.insert(idx_insert, block_obj.curr_block_hash)
+        # TODO: see if this is required or not
+        # Insert the block_obj into self.blockchain_leafs
+        # idx_insert = 0
+        # for i in range(len(self.blockchain_leafs) - 1, -1, -1):  # "i" goes from "N-1" to "0"
+        #     # NOTE: Mostly, the less than condition will never be true in our simulation
+        #     #       However, it can be true in real life
+        #     if block_obj.index <= self.blocks_all[self.blockchain_leafs[i]].index:
+        #         continue
+        #     idx_insert = i + 1
+        #     break
+        # self.blockchain_leafs.insert(idx_insert, block_obj.curr_block_hash)
 
-        # TODO: This can be removed if all manipulations on "self.block_chain_leafs" are correctly implemented
-        for block in self.blocks_all.values():
-            try:
-                self.block_chain_leafs.remove(block.prev_block_hash)
-                g_logger.warning(f'')
-            except ValueError:
-                pass
-        block_chain_leafs_new = sorted(self.block_chain_leafs, key=lambda x: self.blocks_all[x].index)
-        if self.block_chain_leafs != block_chain_leafs_new:
-            g_logger.warning(f'Problem: Blockchain leaf inserting logic not working properly')
-            g_logger.warning(f'{self.block_chain_leafs=}')
-            g_logger.warning(f'{block_chain_leafs_new}')
+        # TODO: This can be removed if all manipulations on "self.blockchain_leafs" are correctly implemented
+        # for block in self.blocks_all.values():
+        #     try:
+        #         self.blockchain_leafs.remove(block.prev_block_hash)
+        #         g_logger.warning(f'')
+        #     except ValueError:
+        #         pass
+        # blockchain_leafs_new = sorted(self.blockchain_leafs, key=lambda x: self.blocks_all[x].index)
+        # if self.blockchain_leafs != blockchain_leafs_new:
+        #     g_logger.warning(f'Problem: Blockchain leaf inserting logic not working properly')
+        #     g_logger.warning(f'{self.blockchain_leafs=}')
+        #     g_logger.warning(f'{blockchain_leafs_new}')
+
         if to_start_new_mining:
-            if block_obj.curr_block_hash not in self.block_chain_leafs:
-                g_logger.error('Problem: Latest tail not properly working')
+            # if block_obj.curr_block_hash not in self.blockchain_leafs:
+            #     g_logger.error('Problem: Latest tail not properly working')
             self.mining_start()
         pass
 
     def get_new_transaction_greedy(self, curr_tail: str) -> List[Transaction]:
         # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
-        # if len(self.txn_pool) <= self.max_transactions_per_block - 1:
-        #     return copy.deepcopy(self.txn_pool)
-        self.txn_pool = list(filter(lambda x: self.is_transaction_validate(x, curr_tail), self.txn_pool))
-        return copy.deepcopy(
-            self.txn_pool[:self.max_transactions_per_block - 1]
-        )
+        # NOTE: we do "self.max_transactions_per_block - 1" because first transaction is Mining Reward Transaction
+        txn_list: List[Transaction] = list()
+        senders_balance: Dict[str, float] = defaultdict(float)
+        for txn in self.txn_pool:
+            if self.is_transaction_valid(txn, curr_tail, senders_balance[txn.id_sender]):
+                txn_list.append(txn)
+                senders_balance[txn.id_sender] -= txn.coin_amount
+                senders_balance[txn.id_receiver] += txn.coin_amount
+        return txn_list
+        # self.txn_pool = list(filter(lambda x: self.is_transaction_valid(x, curr_tail), self.txn_pool))
+        # return copy.deepcopy(
+        #     self.txn_pool[:self.max_transactions_per_block - 1]
+        # )
 
     def get_new_block(self) -> Tuple[bool, Union[Block, None]]:
         # Point 7 of the PDF
-        curr_tail = self.block_chain_leafs[-1]
+        curr_tail = self.blockchain_leafs[-1]
 
         sp: SimulatorParameters = self.simulator.simulator_parameters
         txn_mining_reward: Union[Transaction, None] = None
@@ -863,8 +924,10 @@ class Node:
             g_logger.error(e)
             g_logger.debug(f'curr_tail       = {type(curr_tail)} {curr_tail}')
             g_logger.debug(
-                f'self.blocks_all = {type(self.blocks_all)} {[[str(i), str(j)] for i, j in self.blocks_all.items()]}'
+                f'self.blocks_all = {type(self.blocks_all)}, '
+                f'{[[str(i), j.str_all()] for i, j in self.blocks_all.items()]}'
             )
+            g_logger.error(traceback.format_exc())
             sys.exit(1)
         transactions_to_include = [txn_mining_reward] + self.get_new_transaction_greedy(curr_tail)
 
@@ -878,11 +941,9 @@ class Node:
             block_mine_recv_time,
             block_mine_recv_time
         )
-        pass
 
-    def mining_start(self):
+    def mining_start(self) -> bool:
         new_block_status, new_block = self.get_new_block()
-        new_block.mine_time = new_block.recv_time
         if new_block_status == False:
             return False
         # self.last_receive_time = new_block.creation_time  # TODO: I think this does not need to be here, check once
@@ -897,32 +958,35 @@ class Node:
         )
         return True
 
-    def mining_complete(self, block: Block):
+    def mining_complete(self, block: Block) -> None:
         global g_logger
         # A "Block" which created new longest blockchain was received after the
         # mining started. Hence, we discard this mining complete request because
         # in real life this mining work is to be discarded.
         if block.creation_time < self.last_receive_time:
+            # This mining result is to be discarded because we received a new block which makes
+            # a longer blockchain after the mining started and before it ended.
             g_logger.info(
-                f'Node Id = {self.node_id} , this mining result is to be discarded because we received a '
-                f'new block which makes a longer blockchain after the mining started and before it ended. '
-                f'Mining start time = {block.creation_time:0.5f}, Block receive time = {self.last_receive_time:0.5f}, '
-                f'Current time = {self.simulator.get_global_time()}'
+                f'Node Id = {self.node_id}, Mining start time = {block.creation_time:0.5f}, '
+                f'Block receive time = {self.last_receive_time:0.5f}, Current time = {self.simulator.get_global_time()}'
             )
             return
-        if self.blocks_all[self.block_chain_leafs[-1]].index > block.index:
+        if self.blocks_all[self.blockchain_leafs[-1]].index > block.index:
             g_logger.warning(
-                f'Block mining complete but a chain with longer length is present in "self.block_chain_leafs"'
+                f'Problem: node_id={self.node_id}, Block mining complete but a chain '
+                f'with longer length is present in "self.blockchain_leafs"'
             )
-            g_logger.warning(f'len queue = {self.blocks_all[self.block_chain_leafs[-1]].index=}')
-            g_logger.warning(f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
-        if self.block_chain_leafs[-1] != block.prev_block_hash:
-            g_logger.warning(f'len queue = {self.blocks_all[self.block_chain_leafs[-1]].index=}')
-            g_logger.warning(f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
+            g_logger.warning(f'Problem: node_id={self.node_id}, '
+                             f'len queue = {self.blocks_all[self.blockchain_leafs[-1]].index=}, '
+                             f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
+        if self.blockchain_leafs[-1] != block.prev_block_hash:
+            g_logger.warning(f'Problem: node_id={self.node_id}, '
+                             f'len queue = {self.blocks_all[self.blockchain_leafs[-1]].index=}, '
+                             f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
 
         # Add block to the blockchain
         self.blocks_all[block.curr_block_hash] = block
-        self.block_chain_leafs[-1] = block.curr_block_hash
+        self.blockchain_leafs[-1] = block.curr_block_hash
         # Remove processed transactions from the transaction pool
         # NOTE: we use [1:] because mining reward transaction will not be in the "self.txn_pool"
         for txn in block.transactions[1:]:
@@ -933,6 +997,7 @@ class Node:
                 g_logger.debug(f'txn                = {str(txn)}')
                 g_logger.debug(f'block.transactions = {[str(i) for i in block.transactions]}')
                 g_logger.debug(f'self.txn_pool      = {[str(i) for i in self.txn_pool]}')
+                g_logger.error(traceback.format_exc())
                 sys.exit(1)
 
         # Broadcast the "block" to all "self.neighbors"
@@ -942,13 +1007,13 @@ class Node:
 
     def serialize_blockchain_to_str_v1(self) -> str:
         # TODO: update this if required
-        return '\n'.join([block.serialize() for block in self.blocks_all.values()])
+        return '\n'.join([block.str_all() for block in self.blocks_all.values()])
 
 
 # REFER: https://www.tutorialspoint.com/enum-in-python
 class EventType(enum.Enum):
     EVENT_UNDEFINED = 0
-    EVENT_TRANSACTION_CREATE = 1  # Queue -> data_obj: None
+    EVENT_TRANSACTION_CREATE = 1  # Queue -> data_obj: Transaction
     EVENT_SEND_TRANSACTION = 2
     EVENT_RECV_TRANSACTION = 3  # Queue -> data_obj: Transaction
     EVENT_SEND_BLOCK = 4
@@ -990,24 +1055,17 @@ class EventQueue:
             return
         heapq.heappush(self.events, (new_event.event_completion_time, new_event))
 
-    def pop(self) -> Tuple[bool, Union[None, Event]]:
-        if len(self.events) == 0:
-            return False, None
-        return True, heapq.heappop(self.events)[1]
+    def pop(self) -> Event:
+        return heapq.heappop(self.events)[1]
 
-    def top(self) -> Union[Event, bool]:
-        if len(self.events) == 0:
-            return False
+    def top(self) -> Event:
         return self.events[0][1]
+
+    def empty(self) -> bool:
+        return len(self.events) == 0
 
     def freeze(self) -> None:
         self.add_new_events = False
-
-    def unfreeze(self) -> None:
-        self.add_new_events = True
-
-    def __len__(self) -> int:
-        return len(self.events)
 
 
 def plot_graph_build(blocks_iter: Iterable[Block], blocks_leafs: List[str] = None) -> Digraph:
@@ -1064,13 +1122,14 @@ def plot_graph_build(blocks_iter: Iterable[Block], blocks_leafs: List[str] = Non
     return g
 
 
-def plot_graph_multi(nodes_list: List[Node], save_to_file: bool, base_path: str, file_name: str = ''):
+def plot_graph_combo(nodes_list: List[Node], save_to_file: bool, base_path: str, file_name: str = ''):
     local_blocks_all: Set[Block] = set()
     for node in nodes_list:
         local_blocks_all = local_blocks_all.union(set(node.blocks_all.values()))
 
     g = plot_graph_build(local_blocks_all, None)
 
+    time.sleep(0.5)
     if file_name == '':
         file_name = f'graph_len{len(nodes_list)}_NodeIndex_{nodes_list[0].node_id:03d}_combo'
     if save_to_file:
@@ -1079,16 +1138,21 @@ def plot_graph_multi(nodes_list: List[Node], save_to_file: bool, base_path: str,
         # g.view(filename=file_name + '.png', directory=base_path)
     else:
         g.view(directory=base_path)
+
+    time.sleep(0.5)
     g.render()
 
 
 def plot_graph(node: Node, save_to_file: bool, base_path: str):
-    g = plot_graph_build(node.blocks_all.values(), node.block_chain_leafs)
+    g = plot_graph_build(node.blocks_all.values(), node.blockchain_leafs)
 
+    time.sleep(0.5)
     if save_to_file:
         g.view(filename=os.path.join(base_path, f'graph_NodeIndex_{node.node_id:03d}'))
     else:
         g.view(directory=base_path)
+
+    time.sleep(0.5)
     g.render()
 
 
@@ -1117,7 +1181,7 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
                               f'| {{NewTxnIncluded={len(block.transactions) - (miner_id != "?")}}}'
                 # The below statement is used to check if we have any block hashes which are
                 # not leaf blocks but their hashes are present in the leaf blocks list
-                if node.block_chain_leafs is not None and block.curr_block_hash in node.block_chain_leafs:
+                if node.blockchain_leafs is not None and block.curr_block_hash in node.blockchain_leafs:
                     g_logger.debug(f'{block.curr_block_hash=} , {block.prev_block_hash=} , {point_count=}')
                 if block.prev_block_hash == '-1':  # it is genesis block, color=light blue
                     g_genesis.node(name=str(node.node_id) + '_' + block.curr_block_hash, label=block_label,
@@ -1137,7 +1201,7 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
                           f'| {{NewTxnIncluded={len(block.transactions) - (miner_id != "?")}}}'
             # The below statement is used to check if we have any block hashes which are
             # not leaf blocks but their hashes are present in the leaf blocks list
-            if node.block_chain_leafs is not None and block.curr_block_hash in node.block_chain_leafs:
+            if node.blockchain_leafs is not None and block.curr_block_hash in node.blockchain_leafs:
                 g_logger.debug(f'{block.curr_block_hash=} , {block.prev_block_hash=} , {point_count=}')
             if block.prev_block_hash == '-1':  # it is genesis block, color=light blue
                 # g_genesis.node(name=str(node.node_id) + '_' + block.curr_block_hash, label=block_label,
@@ -1164,33 +1228,37 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
 
     if file_name == '':
         file_name = f'graph_len{len(nodes_list)}_NodeIndex_{nodes_list[0].node_id:03d}_allone'
+
+    time.sleep(0.5)
     if save_to_file:
         g.view(filename=file_name, directory=base_path)
         # g.view(filename=file_name + '.pdf', directory=base_path)
         # g.view(filename=file_name + '.png', directory=base_path)
     else:
         g.view(directory=base_path)
+
+    time.sleep(0.5)
     g.render()
 
 
 def simulator_visualization(mySimulator: Simulator):
-    try:
-        print()
-        print('Input format: (0|1 (0|1 [FILE_NAME]))')
-        view_options = input('Do you want to view the combined blockchain of all nodes (0/1), '
-                             'save_to_file(0/1), [file_name] : ').split()
-        if view_options[0] == '1':
-            plot_graph_multi(
-                mySimulator.nodes_list,
-                (view_options[1] == '1') if len(view_options) >= 2 else False,
-                mySimulator.simulator_parameters.output_path,
-                view_options[2] if len(view_options) >= 3 else ''
-            )
-    except Exception as e:
-        # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
-        g_logger.error(e)
-        g_logger.error(traceback.format_exc())
-    # plot_graph_multi(mySimulator.nodes_list, False, mySimulator.simulator_parameters.output_path)
+    # try:
+    #     print()
+    #     print('Input format: (0|1 (0|1 [FILE_NAME]))')
+    #     view_options = input('Do you want to view the combined blockchain of all nodes (0/1), '
+    #                          'save_to_file(0/1), [file_name] : ').split()
+    #     if view_options[0] == '1':
+    #         plot_graph_multi(
+    #             mySimulator.nodes_list,
+    #             (view_options[1] == '1') if len(view_options) >= 2 else False,
+    #             mySimulator.simulator_parameters.output_path,
+    #             view_options[2] if len(view_options) >= 3 else ''
+    #         )
+    # except Exception as e:
+    #     # REFER: https://stackoverflow.com/questions/3702675/how-to-catch-and-print-the-full-exception-traceback-without-halting-exiting-the
+    #     g_logger.error(e)
+    #     g_logger.error(traceback.format_exc())
+    # # plot_graph_multi(mySimulator.nodes_list, False, mySimulator.simulator_parameters.output_path)
 
     try:
         print()
@@ -1205,7 +1273,7 @@ def simulator_visualization(mySimulator: Simulator):
             #     break
             if len(view_options) == 2:
                 if view_options[1] == 'combo':
-                    plot_graph_multi(
+                    plot_graph_combo(
                         mySimulator.nodes_list,
                         view_options[0] == '1',
                         mySimulator.simulator_parameters.output_path,
@@ -1223,12 +1291,12 @@ def simulator_visualization(mySimulator: Simulator):
                     for i in mySimulator.nodes_list:
                         plot_graph(i, view_options[0] == '1', mySimulator.simulator_parameters.output_path)
                 else:
-                    if int(view_options[1]) >= mySimulator.simulator_parameters.n_total_nodes:
-                        g_logger.warning(
-                            f'Total Nodes in the network = {mySimulator.simulator_parameters.n_total_nodes}'
-                        )
-                        continue
                     try:
+                        if int(view_options[1]) >= mySimulator.simulator_parameters.n_total_nodes:
+                            g_logger.warning(
+                                f'Total Nodes in the network = {mySimulator.simulator_parameters.n_total_nodes}'
+                            )
+                            continue
                         plot_graph(mySimulator.nodes_list[int(view_options[1])], view_options[0] == '1',
                                    mySimulator.simulator_parameters.output_path)
                     except Exception as e:
@@ -1248,11 +1316,11 @@ def debug_stats(mySimulator: Simulator):
     os.chdir('src')
     mySimulator = joblib.load('./blockchains/mySimulator.pkl')
     for node in mySimulator.nodes_list:
-        print(node.block_chain_leafs, node.blocks_all[node.block_chain_leafs[-1]].index)
+        print(node.blockchain_leafs, node.blocks_all[node.blockchain_leafs[-1]].index)
     for node in mySimulator.nodes_list:
         print(len(node.blocks_all))
     for node in mySimulator.nodes_list:
-        print(node.blocks_all[node.block_chain_leafs[-1]].index)
+        print(node.blocks_all[node.blockchain_leafs[-1]].index)
     for node in mySimulator.nodes_list:
         max_block_idx = -1
         for block in node.blocks_all.values():
