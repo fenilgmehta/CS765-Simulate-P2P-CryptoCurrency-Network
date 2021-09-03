@@ -15,17 +15,25 @@
 - `Unit of time = seconds` for everything
 - `md5` hash function is used for speed - Can be updated to use any other hash function
 - `f-strings` feature of Python is used
+- `GenesisBlock.prev_node_hash = -1`
 - `if` a block with `block_index < node.curr_block_index_max` is received, it is __dropped__ because:
     1. The received block is too old
     2. The block creator would not spend his time and computation power in creating and sending a block which does not
        create a longest chain for the receiver
 - Transactions created are always assumed to be authentic in this simulation. In real world, they are signed by the
   sender
-- `mining reward` is always the first transaction of any block, and sender is `-1`
+- `mining reward` is always the first transaction of any block, and sender is `-1` only
     - `Sender == -1` means money is created from thin air
+    - If mining reward transaction is placed at any position other than index 0, then it is invalid
+    - If id_sender for mining reward transaction is anything other than `-1`, then it is invalid
 - `mining_reward_update_percent` is used as follows: `new_reward = old_reward (1 + mining_reward_update_percent / 100)`
     - The above statement will be executed every `mining_reward_update_block_time` blocks
         - i.e. when `longest_chain.index % mining_reward_update_block_time == 0`
+- Sometimes bitcoin and ethereum have empty blocks
+    - Empty blocks are valid
+- Any valid transaction created should enter the blockchain even if forks happen
+    - We find the common ansestor between the tails of the fork with the help of `block index`
+- It is assumed that no one will create time pass transactions where sender and receiver are the same
 
 ### Execution Steps
 
