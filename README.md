@@ -2,7 +2,7 @@
 
 - **Subject** - Introduction to Blockchains, Cryptocurrencies and Smart Contracts (CS 765)
 - **Project** - Build a discrete-event Simulator for a P2P Cryptocurrency Network
-    - [Problem Statement PDF](./CS765_Autum2021_HW1.pdf)
+    - [Problem Statement PDF](./CS765_Autumn2021_HW1.pdf)
 - **Team Members**
     - 203050054 - Fenil Mehta
     - 203059006 - Aditya Pradhan
@@ -44,16 +44,15 @@ python simulator.py --config config.json --debug
 
 ### References
 
-- https://treelib.readthedocs.io/en/latest/
-- https://graphviz.org/Gallery/directed/fsm.html
 - [Bitcoin and cryptocurrency mining explained](https://www.youtube.com/watch?v=kZXXDp0_R-w)
 - [Proof-of-Stake (vs proof-of-work)](https://www.youtube.com/watch?v=M3EFi_POhps)
 - [But how does bitcoin actually work?](https://www.youtube.com/watch?v=bBC-nXj3Ng4)
 - Exponential Distribution
     - [https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html](https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html)
     - [https://en.wikipedia.org/wiki/Exponential_distribution](https://en.wikipedia.org/wiki/Exponential_distribution)
+- [https://graphviz.org/Gallery/directed/fsm.html](https://graphviz.org/Gallery/directed/fsm.html)
 - [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
 - [https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4](Static Typing in Python)
+- [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
 - [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
     - KiloByte (kB) vs. KibiByte (KiB)
-- [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
