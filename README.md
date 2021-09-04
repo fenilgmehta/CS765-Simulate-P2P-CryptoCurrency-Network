@@ -44,6 +44,7 @@ cd src
 python simulator.py --config config.json --debug
 ```
 
+[Sample Execution Output](./samples/SampleExecution_3600seconds.zip)
 ![Blockchain Visualization](./samples/SampleBlockchain.png "Blockchain Visualization")
 ![Execution with graph displayed](./samples/SampleExecutionWithGraph.png "Execution with graph displayed")
 ![Execution in progress](./samples/SampleExecutionRunning.png "Execution in progress")
@@ -54,12 +55,13 @@ python simulator.py --config config.json --debug
 - [Bitcoin and cryptocurrency mining explained](https://www.youtube.com/watch?v=kZXXDp0_R-w)
 - [Proof-of-Stake (vs proof-of-work)](https://www.youtube.com/watch?v=M3EFi_POhps)
 - [But how does bitcoin actually work?](https://www.youtube.com/watch?v=bBC-nXj3Ng4)
+- [Graphviz Visualization](https://graphviz.org/Gallery/directed/fsm.html)
 - Exponential Distribution
     - [https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html](https://numpy.org/doc/stable/reference/random/generated/numpy.random.exponential.html)
     - [https://en.wikipedia.org/wiki/Exponential_distribution](https://en.wikipedia.org/wiki/Exponential_distribution)
-- [https://graphviz.org/Gallery/directed/fsm.html](https://graphviz.org/Gallery/directed/fsm.html)
-- [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
-- [Static Typing in Python](https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4)
-- [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
+- Python specific features
+    - [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
+    - [Static Typing in Python](https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4)
+    - [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
 - [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
     - KiloByte (kB) vs. KibiByte (KiB)
