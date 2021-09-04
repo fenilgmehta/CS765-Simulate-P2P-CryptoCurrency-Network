@@ -32,6 +32,10 @@ from gi.repository import Gtk, GLib
 g_logger = None
 
 
+def defaultdict_float():
+    return defaultdict(float)
+
+
 class SimulatorParameters:
     """Parameters from the configuration file are stored in this class"""
 
@@ -133,6 +137,7 @@ class SimulatorParameters:
 
     def log_parameters(self):
         """Print all the Simulator Parameters to /dev/stdout"""
+        print(f'Execution Time = {self.execution_time} seconds')
         print()
         print(f'      n  = Number of peers specified in the config file : {self.n_total_nodes}')
         print(f'      z  = {self.z_percent_slow_nodes=} %')
@@ -462,6 +467,8 @@ class Node:
         self.blocks_unvalidated: Dict[str, Tuple[int, Block]] = dict()  # Hash -> (Sender, Block)
         self.blockchain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
+        self.cache_balance: Dict[str, Dict] = defaultdict(defaultdict_float)
+
         sp: SimulatorParameters = simulator.simulator_parameters
 
         # Point 7 of PDF: Exponential Distribution Mean for the
@@ -512,6 +519,30 @@ class Node:
             #   - NOTE: d_ij must be randomly chosen for each message transmitted from "i" to "j"
             d_ij = numpy.random.exponential(96_000 / self.c_ij)
             return self.rho_ij + (message_size_bits / self.c_ij) + d_ij
+
+    def cache_update(self, new_tail: str) -> None:
+        if new_tail in self.cache_balance.keys():
+            return
+        balance: Dict[int, float] = defaultdict(float)
+        prev_block_hash: str = self.blocks_all[new_tail].prev_block_hash
+        if prev_block_hash in self.cache_balance.keys():
+            balance = self.cache_balance[prev_block_hash]
+            self.cache_balance.pop(prev_block_hash)
+            for txn in self.blocks_all[new_tail].transactions:
+                balance[txn.id_sender] -= txn.coin_amount  # No need to handle Mining reward transaction
+                balance[txn.id_receiver] += txn.coin_amount
+        else:
+            # self.cache_balance.clear()
+            temp_tail = new_tail
+            while temp_tail != self.GENESIS_BLOCK.prev_block_hash:
+                for txn in self.blocks_all[temp_tail].transactions:
+                    balance[txn.id_sender] -= txn.coin_amount
+                    balance[txn.id_receiver] += txn.coin_amount
+                if temp_tail in self.cache_balance.keys():
+                    self.cache_balance.pop(temp_tail)
+                temp_tail = self.blocks_all[temp_tail].prev_block_hash
+        self.cache_balance[new_tail] = balance
+        pass
 
     def change_mining_branch(self, block_tail_hash_new: str) -> None:
         global g_logger
@@ -763,6 +794,8 @@ class Node:
             g_logger.debug(f'Block: Invalid First Transaction txn={block_obj.transactions[0]}')
             return -1
 
+        self.cache_update(block_obj.prev_block_hash)
+
         senders_balance: Dict[str, float] = defaultdict(float)
         senders_balance[block_obj.transactions[0].id_receiver] += block_obj.transactions[0].coin_amount
         if block_obj.transactions[0].id_sender != -1:
@@ -771,9 +804,26 @@ class Node:
             if txn.id_sender == -1:
                 g_logger.debug(f'Block: Only first transaction can be mining reward transaciton')
                 return -1  # Only FIRST transaction can be mining reward transaction
-            if not self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
+            if txn.id_sender not in self.cache_balance[block_obj.prev_block_hash]:
+                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {str(self.cache_balance)}, '
+                               f'{block_obj.str_all()=}')
+            senders_curr_balance: float = senders_balance[txn.id_sender] \
+                                          + self.cache_balance[block_obj.prev_block_hash][txn.id_sender]
+
+            # NOTE: we use math.isclose because of limitations of float
+            # Example: if sender send 0.13 and calculated current balance is 0.129999999999999
+            #          then we must allow it
+            if txn.coin_amount > senders_curr_balance and (not math.isclose(txn.coin_amount, senders_curr_balance)):
                 g_logger.debug(f'Block: Invalid transaction txn={txn}')
+                # TODO: remove the below "if" statement as it is only for find logical bug in the simulator
+                if self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
+                    g_logger.debug(f'FIXME: cache is not working properly, Cache: Something strange, '
+                                   f'{txn.id_sender}, {str(self.cache_balance)}, {block_obj.str_all()=}')
+                    continue
                 return -1
+            # if not self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
+            #     g_logger.debug(f'Block: Invalid transaction txn={txn}')
+            #     return -1
             senders_balance[txn.id_sender] -= txn.coin_amount
             senders_balance[txn.id_receiver] += txn.coin_amount
         return 1
@@ -872,6 +922,7 @@ class Node:
             self.change_mining_branch(block_obj.curr_block_hash)
             # Insert the block_obj into self.blockchain_leafs
             self.blockchain_leafs.append(block_obj.curr_block_hash)
+            self.cache_update(block_obj.curr_block_hash)
 
         # TODO: see if this is required or not
         # Insert the block_obj into self.blockchain_leafs
@@ -907,10 +958,13 @@ class Node:
     def get_new_transaction_greedy(self, curr_tail: str) -> List[Transaction]:
         # NOTE: python indexing [:N] automatically handles the case where length is less than "N"
         # NOTE: we do "self.max_transactions_per_block - 1" because first transaction is Mining Reward Transaction
+        self.cache_update(curr_tail)
         txn_list: List[Transaction] = list()
-        senders_balance: Dict[str, float] = defaultdict(float)
+        senders_balance: Dict[int, float] = defaultdict(float)
         for txn in self.txn_pool:
-            if self.is_transaction_valid(txn, curr_tail, senders_balance[txn.id_sender]):
+            senders_curr_balance: float = senders_balance[txn.id_sender] + self.cache_balance[curr_tail][txn.id_sender]
+            # if self.is_transaction_valid(txn, curr_tail, senders_balance[txn.id_sender]):
+            if txn.coin_amount <= senders_curr_balance or math.isclose(txn.coin_amount, senders_curr_balance):
                 txn_list.append(txn)
                 senders_balance[txn.id_sender] -= txn.coin_amount
                 senders_balance[txn.id_receiver] += txn.coin_amount
@@ -1364,15 +1418,15 @@ def debug_stats(mySimulator: Simulator):
 # REFER: https://zetcode.com/python/gtk/
 class ProgressBarWindow(Gtk.Window):
     def __init__(self):
-        Gtk.Window.__init__(self, title="Simulation Progress")
+        Gtk.Window.__init__(self, title='Simulation Progress')
         self.set_border_width(10)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.add(vbox)
 
         self.label = Gtk.Label()
-        self.label.set_text("Initializing...")
-        self.label.set_width_chars(40)
+        self.label.set_text('Initializing...')
+        self.label.set_width_chars(50)
         vbox.pack_start(self.label, True, True, 0)
 
         # Create a ProgressBar
@@ -1392,6 +1446,7 @@ class ProgressBarWindow(Gtk.Window):
         self.timeout_id = GLib.timeout_add(500, self.on_timeout, None)
         self.activity_mode = False
         self.progress_percent: float = 0.0
+        self.progress_label: str = 'Initializing...'
 
     def on_activity_mode_toggled(self, button):
         self.activity_mode = button.get_active()
@@ -1412,6 +1467,7 @@ class ProgressBarWindow(Gtk.Window):
             if new_value > 1:
                 new_value = 1
             self.progressbar.set_fraction(new_value)
+            self.label.set_text(self.progress_label)
         return True
 
     @staticmethod
@@ -1436,6 +1492,8 @@ def Main(args: Dict):
     win = ProgressBarWindow()
     thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
     thread.start()
+    win.activity_mode = True
+    win.progress_label = 'Initializing...'
 
     sp = SimulatorParameters()
     sp.load_from_file(args['config'])
@@ -1443,17 +1501,18 @@ def Main(args: Dict):
     mySimulator = Simulator(sp)
     mySimulator.initialize()
 
-    win.label.set_text('Executing...')
+    win.activity_mode = False
+    win.progress_label = 'Executing...'
     last_progress: float = 0.0
     start_time: float = time.time()  # Time in seconds
     while mySimulator.get_global_time() <= sp.execution_time:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
-        win.progress_percent = 0.99 * (mySimulator.get_global_time() / sp.execution_time)
+        win.progress_percent = mySimulator.get_global_time() / sp.execution_time
         if win.progress_percent - last_progress > 0.0001:  # 0.01 / 100
             last_progress = win.progress_percent
-            win.label.set_text(f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
-                               f'{seconds_to_minsec(time.time() - start_time)}<'
-                               f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
+            win.progress_label = (f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
+                                  f'{seconds_to_minsec(time.time() - start_time)}<'
+                                  f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
         status = mySimulator.execute_next_event()
         if status == False:
             g_logger.info('No events present in the event queue. Exiting...')
@@ -1465,7 +1524,7 @@ def Main(args: Dict):
     g_logger.info('Everything freezed except network :)')
     g_logger.info(f'Global Time = {mySimulator.get_global_time()}')
 
-    win.label.set_text('Everything freezed except network...')
+    win.progress_label = 'Everything freezed except network...'
     while True:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
         status = mySimulator.execute_next_event()
@@ -1475,19 +1534,20 @@ def Main(args: Dict):
         # input()
     win.progress_percent = 1.0
 
-    win.label.set_text('Saving results...')
+    win.progress_label = 'Saving results...'
     if sp.simulator_data_filename != '':
         g_logger.info(f'Saving all the progress of simulator to "{sp.simulator_data_filename}"')
         joblib.dump(mySimulator, os.path.join(sp.output_path, sp.simulator_data_filename), compress=2)
     mySimulator.write_all_node_tree_to_file()
 
-    win.label.set_text('Visualization in progress...')
+    win.progress_label = 'Visualization in progress...'
     simulator_visualization(mySimulator)
     simulator_analysis(mySimulator)
 
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
-    win.label.set_text("Completed :)")
+    win.progress_percent = 1.0
+    win.progress_label = 'Completed :)'
     print('Please close the Progress Window')
     thread.join()
 
