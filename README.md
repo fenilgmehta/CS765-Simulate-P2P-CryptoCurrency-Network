@@ -63,5 +63,5 @@ python simulator.py --config config.json --debug
     - [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
     - [Static Typing in Python](https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4)
     - [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
-- [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
-    - KiloByte (kB) vs. KibiByte (KiB)
+- KiloByte (kB) vs. KibiByte (KiB)
+    - [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
