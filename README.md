@@ -59,7 +59,7 @@ python simulator.py --config config.json --debug
     - [https://en.wikipedia.org/wiki/Exponential_distribution](https://en.wikipedia.org/wiki/Exponential_distribution)
 - [https://graphviz.org/Gallery/directed/fsm.html](https://graphviz.org/Gallery/directed/fsm.html)
 - [Making a python user-defined class sortable, hashable](https://stackoverflow.com/questions/7152497/making-a-python-user-defined-class-sortable-hashable)
-- [https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4](Static Typing in Python)
+- [Static Typing in Python](https://towardsdatascience.com/static-typing-in-python-55aa6dfe61b4)
 - [https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports](https://stackoverflow.com/questions/39740632/python-type-hinting-without-cyclic-imports)
 - [https://en.wikipedia.org/wiki/Byte#Multiple-byte_units](https://en.wikipedia.org/wiki/Byte#Multiple-byte_units)
     - KiloByte (kB) vs. KibiByte (KiB)
