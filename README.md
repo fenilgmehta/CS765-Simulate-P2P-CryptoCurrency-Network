@@ -45,7 +45,7 @@ python simulator.py --config config.json --debug
 ```
 
 ![Blockchain Visualization](./samples/SampleBlockchain.png "Blockchain Visualization")
-![Execution with graph](./samples/SampleExecutionWithGraph.png "Execution with graph displayed")
+![Execution with graph displayed](./samples/SampleExecutionWithGraph.png "Execution with graph displayed")
 ![Execution in progress](./samples/SampleExecutionRunning.png "Execution in progress")
 
 
