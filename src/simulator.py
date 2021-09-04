@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import copy
 import enum
 import hashlib
 import heapq
@@ -14,11 +15,19 @@ from collections import defaultdict
 from typing import List, Dict, Union, Tuple, Set, Iterable
 
 import coloredlogs
+import gi
 import joblib
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy
 from graphviz import Digraph
+
+# Since a system can have multiple versions
+# of GTK + installed, we want to make
+# sure that we are importing GTK + 3.
+gi.require_version("Gtk", "3.0")
+
+from gi.repository import Gtk, GLib
 
 g_logger = None
 
@@ -133,7 +142,7 @@ class SimulatorParameters:
         print()
         print(f'    T_tx = (seconds) Exponential Distribution -> '
               f'Transaction Inter-arrival Mean = {self.T_tx_exp_txn_interarrival_mean_sec}')
-        print(f'          average block mining/interarrival time = {self.T_k_block_avg_mining_time_sec}')
+        print(f'          average block mining/interarrival time = {self.T_k_block_avg_mining_time_sec} seconds')
         print(f' min ρij = (seconds) min light propagation delay = {self.min_light_delay_sec}')
         print(f' max ρij = (seconds) max light propagation delay = {self.max_light_delay_sec}')
         print()
@@ -171,6 +180,11 @@ class Simulator:
             for i in range(self.simulator_parameters.n_total_nodes)
         ]
         numpy.random.shuffle(list_malicious)
+        debug_malicious_idx: List[int] = list()
+        for i in range(self.simulator_parameters.n_total_nodes):
+            if list_malicious[i]:
+                debug_malicious_idx.append(i)
+        g_logger.debug(f'{debug_malicious_idx=}')
 
         # Point 7 of PDF: Randomly generate CPU power of the nodes
         hash_power_percent: List[float] = list(numpy.random.random(self.simulator_parameters.n_total_nodes))
@@ -296,15 +310,15 @@ class Simulator:
             # NOTE: the "if" condition is used to reduce the number of redundant log operations
             if self.freeze_everything_except_network:
                 if event.event_type in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_BLOCK_CREATE_SUCCESS]:
-                    g_logger.debug(f'FREEZED: Time={self.get_global_time():.5f} , Event = {event}')
+                    g_logger.debug(f'FREEZED: Time={self.get_global_time():.5f} , Event = {event.str_all()}')
                     break
-                else:
-                    g_logger.debug(f'Network: Time={self.get_global_time():.5f} , Event = {event}')
-            elif event.event_type != EventType.EVENT_RECV_TRANSACTION:
+                elif event.event_type not in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_RECV_TRANSACTION]:
+                    g_logger.debug(f'Network: Time={self.get_global_time():.5f} , Event = {event.str_all()}')
+            elif event.event_type not in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_RECV_TRANSACTION]:
                 # NOTE: EventType.EVENT_RECV_TRANSACTION are not logged because they create a
                 #       lot of log statements (as they are the most highly performed operations)
                 #       and are of no use during debugging
-                g_logger.debug(f'Time={self.get_global_time():.5f} , Event = {event}')
+                g_logger.debug(f'Time={self.get_global_time():.5f} , Event = {event.str_all()}')
 
             if event.event_type == EventType.EVENT_TRANSACTION_CREATE:
                 txn: Transaction = event.data_obj
@@ -500,8 +514,6 @@ class Node:
             return self.rho_ij + (message_size_bits / self.c_ij) + d_ij
 
     def change_mining_branch(self, block_tail_hash_new: str) -> None:
-        # NOTE: this can be optimized by finding the common ancestor of the
-        #       "current tail" on which mining is being done and the "new tail"
         global g_logger
 
         block_tail_hash_old = self.blockchain_leafs[-1]
@@ -902,7 +914,7 @@ class Node:
                 txn_list.append(txn)
                 senders_balance[txn.id_sender] -= txn.coin_amount
                 senders_balance[txn.id_receiver] += txn.coin_amount
-        return txn_list
+        return copy.deepcopy(txn_list[:self.max_transactions_per_block - 1])
         # self.txn_pool = list(filter(lambda x: self.is_transaction_valid(x, curr_tail), self.txn_pool))
         # return copy.deepcopy(
         #     self.txn_pool[:self.max_transactions_per_block - 1]
@@ -948,6 +960,9 @@ class Node:
 
     def mining_start(self) -> bool:
         new_block_status, new_block = self.get_new_block()
+        if new_block_status == True and self.is_block_valid(new_block) == False:
+            g_logger.error(f'Problem: FIXME: The block I created is invalid :(')
+
         if self.is_malicious:
             if new_block_status == False:
                 new_block_status = True
@@ -1059,6 +1074,17 @@ class Event:
     def __str__(self) -> str:
         return f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
                f'{self.event_creator_id: 2d}, {self.event_receiver_id: 2d}, {self.data_obj})'
+
+    def str_all(self) -> str:
+        if type(self.data_obj) == Block:
+            res = f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
+                  f'{self.event_creator_id: 2d}, {self.event_receiver_id: 2d}, Block('
+            block_str = str([self.data_obj.prev_block_hash, self.data_obj.creation_time,
+                             self.data_obj.index, len(self.data_obj.transactions)])
+            return res + block_str + '))'
+        else:
+            return f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
+                   f'{self.event_creator_id: 2d}, {self.event_receiver_id: 2d}, {self.data_obj})'
 
 
 # REFER: https://docs.python.org/3/library/heapq.html
@@ -1334,15 +1360,100 @@ def debug_stats(mySimulator: Simulator):
         print(f'{node.node_id} MAX block index = {max_block_idx}')
 
 
+# REFER: https://www.geeksforgeeks.org/python-progressbar-in-gtk-3/
+# REFER: https://zetcode.com/python/gtk/
+class ProgressBarWindow(Gtk.Window):
+    def __init__(self):
+        Gtk.Window.__init__(self, title="Simulation Progress")
+        self.set_border_width(10)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.add(vbox)
+
+        self.label = Gtk.Label()
+        self.label.set_text("Initializing...")
+        self.label.set_width_chars(40)
+        vbox.pack_start(self.label, True, True, 0)
+
+        # Create a ProgressBar
+        self.progressbar = Gtk.ProgressBar()
+        self.progressbar.set_size_request(width=150, height=-1)
+        # self.progressbar.set_text('Initializing...')
+        # self.progressbar.set_show_text(True)
+        vbox.pack_start(self.progressbar, True, True, 0)
+
+        # Create CheckButton with labels "Show text",
+        # "Activity mode", "Right to Left" respectively
+        button = Gtk.CheckButton(label="Activity mode")
+        button.connect("toggled", self.on_activity_mode_toggled)
+        vbox.pack_start(button, True, True, 0)
+
+        # REFER: https://docs.gtk.org/glib/func.timeout_add.html
+        self.timeout_id = GLib.timeout_add(500, self.on_timeout, None)
+        self.activity_mode = False
+        self.progress_percent: float = 0.0
+
+    def on_activity_mode_toggled(self, button):
+        self.activity_mode = button.get_active()
+        if self.activity_mode:
+            self.progressbar.pulse()
+        else:
+            self.progressbar.set_fraction(0.0)
+
+    def on_timeout(self, user_data):
+        """
+        Update value on the progress bar
+        """
+        if self.activity_mode:
+            self.progressbar.pulse()
+        else:
+            # new_value = self.progressbar.get_fraction() + 0.01
+            new_value = self.progress_percent
+            if new_value > 1:
+                new_value = 1
+            self.progressbar.set_fraction(new_value)
+        return True
+
+    @staticmethod
+    def start_progressbar(win: 'ProgressBarWindow'):
+        win.connect("destroy", Gtk.main_quit)
+        win.show_all()
+        Gtk.main()
+
+
+def seconds_to_minsec(t: float) -> str:
+    t_min = int(t / 60)
+    t_sec = int(t % 60)
+    return f'{t_min:02d}:{t_sec:02d}'
+
+
 def Main(args: Dict):
     global g_logger
+    from threading import Thread
+
+    # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
+    # REFER: https://www.geeksforgeeks.org/start-and-stop-a-thread-in-python/
+    win = ProgressBarWindow()
+    thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
+    thread.start()
+
     sp = SimulatorParameters()
     sp.load_from_file(args['config'])
     sp.log_parameters()
     mySimulator = Simulator(sp)
     mySimulator.initialize()
+
+    win.label.set_text('Executing...')
+    last_progress: float = 0.0
+    start_time: float = time.time()  # Time in seconds
     while mySimulator.get_global_time() <= sp.execution_time:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
+        win.progress_percent = 0.99 * (mySimulator.get_global_time() / sp.execution_time)
+        if win.progress_percent - last_progress > 0.0001:  # 0.01 / 100
+            last_progress = win.progress_percent
+            win.label.set_text(f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
+                               f'{seconds_to_minsec(time.time() - start_time)}<'
+                               f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
         status = mySimulator.execute_next_event()
         if status == False:
             g_logger.info('No events present in the event queue. Exiting...')
@@ -1351,11 +1462,10 @@ def Main(args: Dict):
 
     # Finish executing all events which were triggered till now
     mySimulator.freeze()
-    g_logger.info(f'Everything freezed except network :)')
+    g_logger.info('Everything freezed except network :)')
     g_logger.info(f'Global Time = {mySimulator.get_global_time()}')
-    # triggered_events_remaining: int = len(mySimulator.event_queue)
-    # for i in range(triggered_events_remaining):
-    #     mySimulator.execute_next_event()
+
+    win.label.set_text('Everything freezed except network...')
     while True:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
         status = mySimulator.execute_next_event()
@@ -1363,16 +1473,23 @@ def Main(args: Dict):
             g_logger.info('No events present in the event queue. Exiting...')
             break
         # input()
+    win.progress_percent = 1.0
 
+    win.label.set_text('Saving results...')
     if sp.simulator_data_filename != '':
         g_logger.info(f'Saving all the progress of simulator to "{sp.simulator_data_filename}"')
         joblib.dump(mySimulator, os.path.join(sp.output_path, sp.simulator_data_filename), compress=2)
-
     mySimulator.write_all_node_tree_to_file()
+
+    win.label.set_text('Visualization in progress...')
     simulator_visualization(mySimulator)
     simulator_analysis(mySimulator)
 
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
+
+    win.label.set_text("Completed :)")
+    print('Please close the Progress Window')
+    thread.join()
 
 
 if __name__ == '__main__':
