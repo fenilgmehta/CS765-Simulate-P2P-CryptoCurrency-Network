@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
-import copy
-import enum
-import hashlib
-import heapq
-import json
 import logging
-import math
 import os
-import random
-import sys
 import time
 import traceback
-from collections import defaultdict
-from typing import List, Dict, Union, Tuple, Set, Iterable
-
 import coloredlogs
 import gi
 import joblib
-import matplotlib.pyplot as plt
-import networkx as nx
-import numpy
 import parameters
 import progress
 from graphviz import Digraph
-
-from transaction import Transaction
+from collections import defaultdict
+from typing import List, Dict, Set, Iterable
 from block import Block
-from event import EventType
-from event import Event
-from event import EventQueue
 from sim_and_node import Simulator
 from sim_and_node import Node
 from progress import ProgressBarWindow

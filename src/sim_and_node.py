@@ -16,7 +16,6 @@ from typing import Dict, List, Tuple, Union, Set
 from collections import defaultdict
 import parameters
 from parameters import SimulatorParameters
-from threading import Thread
 
 def defaultdict_float():
     return defaultdict(float)

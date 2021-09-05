@@ -1,5 +1,4 @@
 from gi.repository import Gtk, GLib
-from threading import Lock
 
 setup_success = 0
 
