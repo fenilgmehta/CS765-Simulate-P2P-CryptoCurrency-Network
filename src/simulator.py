@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import numpy
 import parameters
+import progress
 from graphviz import Digraph
 
 from transaction import Transaction
@@ -296,8 +297,15 @@ def Main(args: Dict):
     # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
     # REFER: https://www.geeksforgeeks.org/start-and-stop-a-thread-in-python/
     win = ProgressBarWindow()
+    
     thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
     thread.start()
+
+    while (progress.setup_success != 1):
+        continue
+
+    time.sleep(0.5)
+
     win.activity_mode = True
     win.progress_label = 'Initializing...'
 

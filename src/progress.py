@@ -1,9 +1,13 @@
 from gi.repository import Gtk, GLib
+from threading import Lock
+
+setup_success = 0
 
 # REFER: https://www.geeksforgeeks.org/python-progressbar-in-gtk-3/
 # REFER: https://zetcode.com/python/gtk/
 class ProgressBarWindow(Gtk.Window):
     def __init__(self):
+        global setup_success
         Gtk.Window.__init__(self, title='Simulation Progress')
         self.set_border_width(10)
 
@@ -33,6 +37,8 @@ class ProgressBarWindow(Gtk.Window):
         self.activity_mode = False
         self.progress_percent: float = 0.0
         self.progress_label: str = 'Initializing...'
+
+        setup_success = 1
 
     def on_activity_mode_toggled(self, button):
         self.activity_mode = button.get_active()
