@@ -31,6 +31,7 @@ from gi.repository import Gtk, GLib
 
 g_logger = None
 
+progress_bar_init_success = False
 
 def defaultdict_float():
     return defaultdict(float)
@@ -1418,6 +1419,7 @@ def debug_stats(mySimulator: Simulator):
 # REFER: https://zetcode.com/python/gtk/
 class ProgressBarWindow(Gtk.Window):
     def __init__(self):
+        global progress_bar_init_success
         Gtk.Window.__init__(self, title='Simulation Progress')
         self.set_border_width(10)
 
@@ -1447,6 +1449,8 @@ class ProgressBarWindow(Gtk.Window):
         self.activity_mode = False
         self.progress_percent: float = 0.0
         self.progress_label: str = 'Initializing...'
+
+        progress_bar_init_success = True
 
     def on_activity_mode_toggled(self, button):
         self.activity_mode = button.get_active()
@@ -1484,7 +1488,7 @@ def seconds_to_minsec(t: float) -> str:
 
 
 def Main(args: Dict):
-    global g_logger
+    global g_logger, progress_bar_init_success
     from threading import Thread
 
     # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
@@ -1492,6 +1496,13 @@ def Main(args: Dict):
     win = ProgressBarWindow()
     thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
     thread.start()
+
+    # Wait for progress bar to setup before executing the upcoming statements
+    while (not progress_bar_init_success):
+        continue
+
+    time.sleep(0.5)
+    
     win.activity_mode = True
     win.progress_label = 'Initializing...'
 
