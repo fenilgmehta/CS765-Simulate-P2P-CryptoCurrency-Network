@@ -293,7 +293,6 @@ def seconds_to_minsec(t: float) -> str:
 
 def Main(args: Dict):
     from threading import Thread
-    print("AHEOR1")
     # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
     # REFER: https://www.geeksforgeeks.org/start-and-stop-a-thread-in-python/
     win = ProgressBarWindow()
@@ -307,8 +306,6 @@ def Main(args: Dict):
     sp.log_parameters()
     mySimulator = Simulator(sp)
     mySimulator.initialize()
-
-    print("AHEOR")
     
     win.activity_mode = False
     win.progress_label = 'Executing...'
