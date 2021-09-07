@@ -1412,19 +1412,23 @@ def simulator_visualization(mySimulator: Simulator) -> None:
     pass
 
 
-# This function is used for analysing the various simulations
-def simulator_analysis(mySimulator: Simulator) -> None:
+def simulation_analysis(mySimulator: Simulator) -> None:
+    """This function is used to analyze the simulation results"""
     global hash_power_median
-
     for node in mySimulator.nodes_list:
         total_blocks = len(node.blocks_all)
 
-        len_longest_chain = node.blocks_all[node.blockchain_leafs[-1]].index + 1
-
+        # Points to the last block of the longest blockchain known to "node.node_id"
         block = node.blocks_all[node.blockchain_leafs[-1]]
+
+        # Total blocks in the longest blockchain known to "node.node_id"
+        len_longest_chain = block.index + 1
+        # Total blocks in the longest blockchain known to "node.node_id" which are mined it
         node_blocks_longest_chain = 0
 
         while block.index != 0:
+            # First transaction of each block if Mining Reward transaction
+            # where the receiver is the miner of the block
             if block.transactions[0].id_receiver == node.node_id:
                 node_blocks_longest_chain += 1
             block = node.blocks_all[block.prev_block_hash]
@@ -1441,6 +1445,7 @@ def simulator_analysis(mySimulator: Simulator) -> None:
 
         print("Ratio  (longest_chain_len/total_block_gen): " +
               str(node_blocks_longest_chain / node.block_generation_count))
+    pass
 
 
 def debug_stats(mySimulator: Simulator):
@@ -1598,7 +1603,7 @@ def Main(args: Dict):
 
     win.progress_label = 'Visualization in progress...'
     simulator_visualization(mySimulator)
-    simulator_analysis(mySimulator)
+    simulation_analysis(mySimulator)
 
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
