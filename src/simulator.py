@@ -33,6 +33,8 @@ g_logger = None
 
 progress_bar_init_success = False
 
+hash_power_median = 0
+
 def defaultdict_float():
     return defaultdict(float)
 
@@ -173,7 +175,7 @@ class Simulator:
         pass
 
     def initialize(self) -> None:
-        global g_logger
+        global g_logger, hash_power_median
 
         # GENESIS_BLOCK = self.__create_genesis_block()
         GENESIS_BLOCK = self.__create_genesis_block_v2_empty()
@@ -196,6 +198,8 @@ class Simulator:
         hash_power_percent: List[float] = list(numpy.random.random(self.simulator_parameters.n_total_nodes))
         hash_power_percent_sum = 100 / sum(hash_power_percent)
         hash_power_percent = [i * hash_power_percent_sum for i in hash_power_percent]
+        hash_power_median = numpy.median(hash_power_percent)
+
         g_logger.debug(f'{hash_power_percent=}')
 
         # Create the nodes
@@ -454,7 +458,7 @@ class Node:
         self.simulator: Simulator = simulator
         self.is_network_fast = is_network_fast
         self.is_malicious: bool = is_malicious
-
+        self.block_generation_count = 0
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
         # The time at which a new block with chain length > local chain length is received
@@ -469,7 +473,7 @@ class Node:
         self.blockchain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         self.cache_balance: Dict[str, Dict] = defaultdict(defaultdict_float)
-
+        self.node_hash_power_percent = hash_power_percent
         sp: SimulatorParameters = simulator.simulator_parameters
 
         # Point 7 of PDF: Exponential Distribution Mean for the
@@ -1043,6 +1047,9 @@ class Node:
                 new_block
             )
         )
+
+        self.block_generation_count += 1
+
         return True
 
     def mining_complete(self, block: Block) -> None:
@@ -1057,6 +1064,7 @@ class Node:
                 f'Node Id = {self.node_id}, Mining start time = {block.creation_time:0.5f}, '
                 f'Block receive time = {self.last_receive_time:0.5f}, Current time = {self.simulator.get_global_time()}'
             )
+            self.block_generation_count -= 1
             return
 
         # NOTE: the below two "IF" condition will never be True if `mining_start()` and its depends work correctly
@@ -1392,11 +1400,36 @@ def simulator_visualization(mySimulator: Simulator) -> None:
         g_logger.error(traceback.format_exc())
     pass
 
-
+# This function is used for analysing the various simulations
 def simulator_analysis(mySimulator: Simulator) -> None:
-    # TODO: print analysis
-    pass
+    '''
+    global hash_power_median
 
+    for node in mySimulator.nodes_list:
+        total_blocks = len(node.blocks_all)
+        
+        len_longest_chain = node.blocks_all[node.blockchain_leafs[-1]].index + 1
+        
+        block = node.blocks_all[node.blockchain_leafs[-1]]
+        node_blocks_longest_chain = 0
+        
+        while block.index != 0:
+            if block.transactions[0].id_receiver == node.node_id:
+                node_blocks_longest_chain += 1
+            block = node.blocks_all[block.prev_block_hash]
+            
+        if node.is_network_fast:
+            print("Node type: Fast", sep='\t')
+        else:
+            print("Node type: Slow", sep='\t')
+        
+        if node.node_hash_power_percent > hash_power_median:
+            print("CPU Power: High", sep='\t')
+        else:
+            print("CPU Power: Low", sep='\t')
+
+        print ("Ratio  (longest_chain_len/total_block_gen): " + str(node_blocks_longest_chain / node.block_generation_count))
+        '''
 
 def debug_stats(mySimulator: Simulator):
     g_logger = logging.getLogger(__name__)
