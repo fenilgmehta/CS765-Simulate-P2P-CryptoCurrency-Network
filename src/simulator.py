@@ -35,6 +35,7 @@ progress_bar_init_success = False
 
 hash_power_median = 0
 
+
 def defaultdict_float():
     return defaultdict(float)
 
@@ -359,7 +360,7 @@ class Simulator:
         for node in self.nodes_list:
             self.write_node_tree_to_file(
                 node_obj=node,
-                file_name=f'{self.simulator_parameters.output_path}/tree_{node.node_id:03d}'
+                file_name=f'{self.simulator_parameters.output_path}/tree_{node.node_id:03d}.txt'
             )
         pass
 
@@ -372,7 +373,7 @@ class Simulator:
             temp_name = file_name + f'_({i:03d}).txt'
             i += 1
         with open(temp_name, 'w+') as f:
-            f.write(node_obj.serialize_blockchain_to_str_v1())
+            f.write(node_obj.serialize_blockchain_to_str_v2())
             g_logger.info(f'Successfully written to file_name="{file_name}"')
         pass
 
@@ -424,7 +425,7 @@ class Block:
     def __str__(self) -> str:
         """
         NOTE: this does not include block hash
-        String of "self.prev_block_hash", "self.creation_time", "self.index" and "self.transaction"
+        String of "self.prev_block_hash", "self.creation_time", "self.index" and "self.transactions"
         """
         return str([self.prev_block_hash, self.creation_time, self.index, [str(i) for i in self.transactions]])
 
@@ -434,7 +435,7 @@ class Block:
 
     def get_hash(self) -> str:
         """
-        Hash is calculated based on "self.prev_block_hash", "self.creation_time" and "self.transactions"
+        Hash is calculated based on "self.prev_block_hash", "self.creation_time", "self.index" and "self.transactions"
         """
         return hashlib.md5(str(self).encode()).hexdigest()
 
@@ -710,7 +711,7 @@ class Node:
                 EventType.EVENT_RECV_TRANSACTION,
                 self.node_id,
                 receiver_node.node_id,
-                transaction_obj
+                copy.deepcopy(transaction_obj)
             )
         )
 
@@ -840,7 +841,7 @@ class Node:
                 EventType.EVENT_RECV_BLOCK,
                 self.node_id,
                 receiver_node.node_id,
-                block_obj
+                copy.deepcopy(block_obj)
             )
         )
 
@@ -1105,6 +1106,16 @@ class Node:
     def serialize_blockchain_to_str_v1(self) -> str:
         # TODO: update this if required
         return '\n'.join([block.str_all() for block in self.blocks_all.values()])
+
+    def serialize_blockchain_to_str_v2(self) -> str:
+        # Based on what was suggested on MSTeams
+        # - Parameters to write: BlockHash, BlockNum, TimeOfArrival, ParentBlockHash
+        # - Sorted based on block index
+        all_blocks = sorted(list(self.blocks_all.values()), key=lambda x: x.index)
+        return '\n'.join([
+            f'{b.curr_block_hash},{b.index},{b.recv_time:.15f},{b.prev_block_hash}'
+            for b in all_blocks
+        ])
 
 
 # REFER: https://www.tutorialspoint.com/enum-in-python
@@ -1400,36 +1411,37 @@ def simulator_visualization(mySimulator: Simulator) -> None:
         g_logger.error(traceback.format_exc())
     pass
 
+
 # This function is used for analysing the various simulations
 def simulator_analysis(mySimulator: Simulator) -> None:
-    '''
     global hash_power_median
 
     for node in mySimulator.nodes_list:
         total_blocks = len(node.blocks_all)
-        
+
         len_longest_chain = node.blocks_all[node.blockchain_leafs[-1]].index + 1
-        
+
         block = node.blocks_all[node.blockchain_leafs[-1]]
         node_blocks_longest_chain = 0
-        
+
         while block.index != 0:
             if block.transactions[0].id_receiver == node.node_id:
                 node_blocks_longest_chain += 1
             block = node.blocks_all[block.prev_block_hash]
-            
+
         if node.is_network_fast:
             print("Node type: Fast", sep='\t')
         else:
             print("Node type: Slow", sep='\t')
-        
+
         if node.node_hash_power_percent > hash_power_median:
             print("CPU Power: High", sep='\t')
         else:
             print("CPU Power: Low", sep='\t')
 
-        print ("Ratio  (longest_chain_len/total_block_gen): " + str(node_blocks_longest_chain / node.block_generation_count))
-        '''
+        print("Ratio  (longest_chain_len/total_block_gen): " +
+              str(node_blocks_longest_chain / node.block_generation_count))
+
 
 def debug_stats(mySimulator: Simulator):
     g_logger = logging.getLogger(__name__)
@@ -1535,7 +1547,7 @@ def Main(args: Dict):
         continue
 
     time.sleep(0.5)
-    
+
     win.activity_mode = True
     win.progress_label = 'Initializing...'
 
