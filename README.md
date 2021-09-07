@@ -7,6 +7,9 @@
     - 203050054 - Fenil Mehta
     - 203059006 - Aditya Pradhan
     - 20305R005 - Arnab Das
+- **Implementation/Solution**
+    - [Control Flow Chart](./CS765_ControlFlowChart.pdf)
+    - [Report](./CS765_Report.pdf)
 
 
 ### Points to Note
@@ -44,10 +47,10 @@ cd src
 python simulator.py --config config.json --debug
 ```
 
-[Sample Execution Output](./samples/SampleExecution_3600seconds.zip)
-![Blockchain Visualization](./samples/SampleBlockchain.png "Blockchain Visualization")
-![Execution with graph displayed](./samples/SampleExecutionWithGraph.png "Execution with graph displayed")
-![Execution in progress](./samples/SampleExecutionRunning.png "Execution in progress")
+[Sample Execution Output](./resources/SampleExecution_3600seconds.zip)
+![Blockchain Visualization](./resources/SampleBlockchain.png "Blockchain Visualization")
+![Execution with graph displayed](./resources/SampleExecutionWithGraph.png "Execution with graph displayed")
+![Execution in progress](./resources/SampleExecutionRunning.png "Execution in progress")
 
 
 ### References
