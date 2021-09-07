@@ -429,6 +429,14 @@ class Block:
         """
         return str([self.prev_block_hash, self.creation_time, self.index, [str(i) for i in self.transactions]])
 
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Block):
+            return False
+        return self.curr_block_hash == other.curr_block_hash
+
+    def __hash__(self) -> int:
+        return int(self.get_hash(), base=16)
+
     def str_all(self) -> str:
         return str([self.curr_block_hash, self.recv_time,  # These both are not present in __str__
                     self.prev_block_hash, self.creation_time, self.index, [str(i) for i in self.transactions]])
