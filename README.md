@@ -32,8 +32,8 @@
   1. The received block can become ancestor of a block which forms a longer chain in future
   2. The block creator would not spend their time and computation power in creating and sending a block which does not
      create a longest chain
-- `Transactions` created are always assumed to be authentic in this simulation. In real world, they are signed by the
-  sender
+- `Transactions` created are always assumed to be authentic in this simulation
+  - In the real world, they are signed by the transaction creators (i.e. money senders)
 - `mining reward` is always the first transaction of any block, and sender is `-1` only
   - `Sender == -1` means money is created from thin air
   - If mining reward transaction is placed at any position other than index 0, then it is invalid
@@ -48,8 +48,13 @@
 - `Simple Cache` is implemented to optimize block validation and creation
 - It is assumed that no one will create time pass transactions where sender and receiver are the same
 
-- Clarifications regarding Assignment 2
-  - The attackers is a single node/peer
+- Clarifications specific to Assignment 2
+  - The attacker is a single node
+  - In case of more than one attacker nodes, they all will perform attack individually. They do *NOT* coordinate with 
+    each other and are unaware of the existence of other attackers
+  - Each attacker assumes that all other people are honest (this assumption is not used by the attacker in any part of 
+    the attacking logic)
+  - The attacker does not forward blocks generated/mined by other nodes
 
 ### Execution Steps and Images
 
