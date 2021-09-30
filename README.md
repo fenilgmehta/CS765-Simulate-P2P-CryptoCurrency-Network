@@ -21,7 +21,7 @@
     - [Code - src2](./src2)
     - [Report 2 - TO ADD](./CS765_Report_Assignment-2.pdf)
 
-### Points to Note
+## Points to Note
 
 - `Node == Peer == Miner` all three mean the same
 - `txn == transaction`
@@ -47,18 +47,17 @@
   - We find the common ansestor between the tails of the fork with the help of `block index`
 - `Simple Cache` is implemented to optimize block validation and creation
 - It is assumed that no one will create time pass transactions where sender and receiver are the same
-
 - Clarifications specific to Assignment 2
   - The attacker is a single node
-  - In case of more than one attacker nodes, they all will perform attack individually. They do *NOT* coordinate with 
+  - In case of more than one attacker nodes, they all will perform attack individually. They do *NOT* coordinate with
     each other and are unaware of the existence of other attackers
-  - Each attacker assumes that all other people are honest (this assumption is not used by the attacker in any part of 
+  - Each attacker assumes that all other people are honest (this assumption is not used by the attacker in any part of
     the attacking logic)
   - The attacker does not forward blocks generated/mined by other nodes
 
-### Execution Steps and Images
+## Execution Steps and Images
 
-##### Assignment 1
+### Assignment 1
 
 ```shell
 cd src1
@@ -70,14 +69,14 @@ python simulator.py --config config.json --debug
 ![Execution with graph displayed](./resources/SampleExecutionWithGraph.png "Execution with graph displayed")
 ![Execution in progress](./resources/SampleExecutionRunning.png "Execution in progress")
 
-##### Assignment 2
+### Assignment 2
 
 ```shell
 cd src2
 python simulator.py --config config.json --debug
 ```
 
-### References
+## References
 
 - [Bitcoin and cryptocurrency mining explained](https://www.youtube.com/watch?v=kZXXDp0_R-w)
 - [Proof-of-Stake (vs proof-of-work)](https://www.youtube.com/watch?v=M3EFi_POhps)
