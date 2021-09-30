@@ -43,7 +43,7 @@
 ### Execution Steps and Images
 
 ```shell
-cd src
+cd src1
 python simulator.py --config config.json --debug
 ```
 
