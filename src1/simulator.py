@@ -212,7 +212,9 @@ class Simulator:
 
         # Create a connected graph
         # Point 4 of the problem statement PDF
+        g_logger.debug('Creating the network graph...')
         self.__create_connected_graph()
+        g_logger.debug('Network graph created :)')
 
         # Begin the infinite random transaction creation process
         # While handling an old transaction, a new transaction is created
@@ -266,6 +268,7 @@ class Simulator:
         n: int = self.simulator_parameters.n_total_nodes
 
         # Creating the barabasi albert graph for 'n' nodes
+        # Scale free network
         g: nx.classes.graph.Graph = nx.barabasi_albert_graph(
             n,
             random.randint(1, 10 if n > 10 else max(1, n - 1))
@@ -302,7 +305,8 @@ class Simulator:
             self.nodes_list[node_j_id].add_new_peer(node_i_id, adj_mat[node_j_id][node_i_id], c_ij)
 
         nx.draw(g, with_labels=True)
-        plt.show()
+        plt.savefig(f'{self.simulator_parameters.output_path}/graph.png')
+        # plt.show()
 
     def freeze(self) -> None:
         self.freeze_everything_except_network = True
@@ -819,7 +823,7 @@ class Node:
                 g_logger.debug(f'Block: Only first transaction can be mining reward transaciton')
                 return -1  # Only FIRST transaction can be mining reward transaction
             if txn.id_sender not in self.cache_balance[block_obj.prev_block_hash]:
-                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {str(self.cache_balance)}, '
+                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {block_obj.prev_block_hash=}, {str(self.cache_balance)}, '
                                f'{block_obj.str_all()=}')
             senders_curr_balance: float = senders_balance[txn.id_sender] \
                                           + self.cache_balance[block_obj.prev_block_hash][txn.id_sender]
@@ -832,7 +836,7 @@ class Node:
                 # TODO: remove the below "if" statement as it is only for find logical bug in the simulator
                 if self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
                     g_logger.debug(f'FIXME: cache is not working properly, Cache: Something strange, '
-                                   f'{txn.id_sender}, {str(self.cache_balance)}, {block_obj.str_all()=}')
+                                   f'{txn.id_sender}, {block_obj.prev_block_hash=}, {str(self.cache_balance)}, {block_obj.str_all()=}')
                     continue
                 return -1
             # if not self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
@@ -1424,6 +1428,7 @@ def simulation_analysis(mySimulator: Simulator) -> None:
     """This function is used to analyze the simulation results"""
     global hash_power_median
     for node in mySimulator.nodes_list:
+        print('\nNode id = {node.node_id}')
         total_blocks = len(node.blocks_all)
 
         # Points to the last block of the longest blockchain known to "node.node_id"
@@ -1442,16 +1447,16 @@ def simulation_analysis(mySimulator: Simulator) -> None:
             block = node.blocks_all[block.prev_block_hash]
 
         if node.is_network_fast:
-            print("Node type: Fast", sep='\t')
+            print("Node type = Fast", sep='\t')
         else:
-            print("Node type: Slow", sep='\t')
+            print("Node type = Slow", sep='\t')
 
         if node.node_hash_power_percent > hash_power_median:
-            print("CPU Power: High", sep='\t')
+            print("CPU Power = High", sep='\t')
         else:
-            print("CPU Power: Low", sep='\t')
+            print("CPU Power = Low", sep='\t')
 
-        print("Ratio  (longest_chain_len/total_block_gen): " +
+        print("Ratio (longest_chain_len/total_block_gen) = " +
               str(node_blocks_longest_chain / node.block_generation_count))
     pass
 
@@ -1551,18 +1556,19 @@ def Main(args: Dict):
 
     # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
     # REFER: https://www.geeksforgeeks.org/start-and-stop-a-thread-in-python/
-    win = ProgressBarWindow()
-    thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
-    thread.start()
+    # win = ProgressBarWindow()
+    # thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
+    # thread.start()
 
     # Wait for progress bar to setup before executing the upcoming statements
-    while (not progress_bar_init_success):
-        continue
+    # while (not progress_bar_init_success):
+    #     continue
 
-    time.sleep(0.5)
+    # time.sleep(0.5)
 
-    win.activity_mode = True
-    win.progress_label = 'Initializing...'
+    # win.activity_mode = True
+    # win.progress_label = 'Initializing...'
+    print('Initializing...', file=sys.stderr)
 
     sp = SimulatorParameters()
     sp.load_from_file(args['config'])
@@ -1570,18 +1576,21 @@ def Main(args: Dict):
     mySimulator = Simulator(sp)
     mySimulator.initialize()
 
-    win.activity_mode = False
-    win.progress_label = 'Executing...'
+    # win.activity_mode = False
+    # win.progress_label = 'Executing...'
+    print('Executing...', file=sys.stderr)
+    progress_percent: float = 0.0
     last_progress: float = 0.0
     start_time: float = time.time()  # Time in seconds
     while mySimulator.get_global_time() <= sp.execution_time:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
-        win.progress_percent = mySimulator.get_global_time() / sp.execution_time
-        if win.progress_percent - last_progress > 0.0001:  # 0.01 / 100
-            last_progress = win.progress_percent
-            win.progress_label = (f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
-                                  f'{seconds_to_minsec(time.time() - start_time)}<'
-                                  f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
+        progress_percent = mySimulator.get_global_time() / sp.execution_time
+        if progress_percent - last_progress > 0.0001:  # 0.01 / 100
+            last_progress = progress_percent
+            progress_label = (f'\rExecuting ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
+                              f'{seconds_to_minsec(time.time() - start_time)}<'
+                              f'{seconds_to_minsec((time.time() - start_time) / progress_percent)})')
+            print(progress_label, end='', file=sys.stderr)
         status = mySimulator.execute_next_event()
         if status == False:
             g_logger.info('No events present in the event queue. Exiting...')
@@ -1593,7 +1602,7 @@ def Main(args: Dict):
     g_logger.info('Everything freezed except network :)')
     g_logger.info(f'Global Time = {mySimulator.get_global_time()}')
 
-    win.progress_label = 'Everything freezed except network...'
+    print('\nEverything freezed except network...', file=sys.stderr)
     while True:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
         status = mySimulator.execute_next_event()
@@ -1601,24 +1610,21 @@ def Main(args: Dict):
             g_logger.info('No events present in the event queue. Exiting...')
             break
         # input()
-    win.progress_percent = 1.0
+    print(r'\nExecution 100% complete :)', file=sys.stderr)
 
-    win.progress_label = 'Saving results...'
+    print(r'\nSaving results...', file=sys.stderr)
     if sp.simulator_data_filename != '':
         g_logger.info(f'Saving all the progress of simulator to "{sp.simulator_data_filename}"')
         joblib.dump(mySimulator, os.path.join(sp.output_path, sp.simulator_data_filename), compress=2)
     mySimulator.write_all_node_tree_to_file()
 
-    win.progress_label = 'Visualization in progress...'
+    print(r'\nVisualization in progress...', file=sys.stderr)
     simulator_visualization(mySimulator)
     simulation_analysis(mySimulator)
 
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
-    win.progress_percent = 1.0
-    win.progress_label = 'Completed :)'
-    print('Please close the Progress Window')
-    thread.join()
+    print(r'\nCompleted :)', file=sys.stderr)
 
 
 if __name__ == '__main__':
@@ -1652,11 +1658,11 @@ if __name__ == '__main__':
     #            - https://github.com/xolox/python-coloredlogs
     if args.debug:
         # g_logger.setLevel(logging.DEBUG)
-        coloredlogs.install(fmt='%(levelname)-8s :: [%(lineno)4s] %(name)10s :: %(message)s', level='DEBUG',
+        coloredlogs.install(fmt='%(levelname)-5s [%(lineno)4s]: %(message)s', level='DEBUG',
                             logger=g_logger)
     else:
         # g_logger.setLevel(logging.INFO)
-        coloredlogs.install(fmt='%(levelname)-8s :: [%(lineno)4s] %(name)10s :: %(message)s', level='INFO',
+        coloredlogs.install(fmt='%(levelname)-5s [%(lineno)4s]: %(message)s', level='INFO',
                             logger=g_logger)
 
     g_logger.debug('Debugging is ON')
