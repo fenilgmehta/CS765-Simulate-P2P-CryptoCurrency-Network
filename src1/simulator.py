@@ -15,23 +15,13 @@ from collections import defaultdict
 from typing import List, Dict, Union, Tuple, Set, Iterable
 
 import coloredlogs
-import gi
 import joblib
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy
 from graphviz import Digraph
 
-# Since a system can have multiple versions
-# of GTK + installed, we want to make
-# sure that we are importing GTK + 3.
-gi.require_version("Gtk", "3.0")
-
-from gi.repository import Gtk, GLib
-
 g_logger = None
-
-progress_bar_init_success = False
 
 hash_power_median = 0
 
@@ -823,8 +813,8 @@ class Node:
                 g_logger.debug(f'Block: Only first transaction can be mining reward transaciton')
                 return -1  # Only FIRST transaction can be mining reward transaction
             if txn.id_sender not in self.cache_balance[block_obj.prev_block_hash]:
-                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {block_obj.prev_block_hash=}, {str(self.cache_balance)}, '
-                               f'{block_obj.str_all()=}')
+                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {block_obj.prev_block_hash=}, '
+                               f'{str(self.cache_balance)}, {block_obj.str_all()=}')
             senders_curr_balance: float = senders_balance[txn.id_sender] \
                                           + self.cache_balance[block_obj.prev_block_hash][txn.id_sender]
 
@@ -1478,72 +1468,6 @@ def debug_stats(mySimulator: Simulator):
         print(f'{node.node_id} MAX block index = {max_block_idx}')
 
 
-# REFER: https://www.geeksforgeeks.org/python-progressbar-in-gtk-3/
-# REFER: https://zetcode.com/python/gtk/
-class ProgressBarWindow(Gtk.Window):
-    def __init__(self):
-        global progress_bar_init_success
-        Gtk.Window.__init__(self, title='Simulation Progress')
-        self.set_border_width(10)
-
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.add(vbox)
-
-        self.label = Gtk.Label()
-        self.label.set_text('Initializing...')
-        self.label.set_width_chars(50)
-        vbox.pack_start(self.label, True, True, 0)
-
-        # Create a ProgressBar
-        self.progressbar = Gtk.ProgressBar()
-        self.progressbar.set_size_request(width=150, height=-1)
-        # self.progressbar.set_text('Initializing...')
-        # self.progressbar.set_show_text(True)
-        vbox.pack_start(self.progressbar, True, True, 0)
-
-        # Create CheckButton with labels "Show text",
-        # "Activity mode", "Right to Left" respectively
-        button = Gtk.CheckButton(label="Activity mode")
-        button.connect("toggled", self.on_activity_mode_toggled)
-        vbox.pack_start(button, True, True, 0)
-
-        # REFER: https://docs.gtk.org/glib/func.timeout_add.html
-        self.timeout_id = GLib.timeout_add(500, self.on_timeout, None)
-        self.activity_mode = False
-        self.progress_percent: float = 0.0
-        self.progress_label: str = 'Initializing...'
-
-        progress_bar_init_success = True
-
-    def on_activity_mode_toggled(self, button):
-        self.activity_mode = button.get_active()
-        if self.activity_mode:
-            self.progressbar.pulse()
-        else:
-            self.progressbar.set_fraction(0.0)
-
-    def on_timeout(self, user_data):
-        """
-        Update value on the progress bar
-        """
-        if self.activity_mode:
-            self.progressbar.pulse()
-        else:
-            # new_value = self.progressbar.get_fraction() + 0.01
-            new_value = self.progress_percent
-            if new_value > 1:
-                new_value = 1
-            self.progressbar.set_fraction(new_value)
-            self.label.set_text(self.progress_label)
-        return True
-
-    @staticmethod
-    def start_progressbar(win: 'ProgressBarWindow'):
-        win.connect("destroy", Gtk.main_quit)
-        win.show_all()
-        Gtk.main()
-
-
 def seconds_to_minsec(t: float) -> str:
     t_min = int(t / 60)
     t_sec = int(t % 60)
@@ -1551,23 +1475,8 @@ def seconds_to_minsec(t: float) -> str:
 
 
 def Main(args: Dict):
-    global g_logger, progress_bar_init_success
-    from threading import Thread
+    global g_logger
 
-    # REFER: https://stackoverflow.com/questions/2905965/creating-threads-in-python
-    # REFER: https://www.geeksforgeeks.org/start-and-stop-a-thread-in-python/
-    # win = ProgressBarWindow()
-    # thread = Thread(target=ProgressBarWindow.start_progressbar, args=(win,), daemon=True)
-    # thread.start()
-
-    # Wait for progress bar to setup before executing the upcoming statements
-    # while (not progress_bar_init_success):
-    #     continue
-
-    # time.sleep(0.5)
-
-    # win.activity_mode = True
-    # win.progress_label = 'Initializing...'
     print('Initializing...', file=sys.stderr)
 
     sp = SimulatorParameters()
@@ -1576,8 +1485,6 @@ def Main(args: Dict):
     mySimulator = Simulator(sp)
     mySimulator.initialize()
 
-    # win.activity_mode = False
-    # win.progress_label = 'Executing...'
     print('Executing...', file=sys.stderr)
     progress_percent: float = 0.0
     last_progress: float = 0.0
