@@ -134,4 +134,5 @@ dmypy.json
 
 testing/
 
-src/blockchains/
+src*/blockchains*/
+*.7z
