@@ -34,6 +34,8 @@ class SimulatorParameters:
     def __init__(self) -> None:
         self.output_path: str = './blockchains'
         self.simulator_data_filename: str = 'mySimulator.pkl'
+        self.bool_save_simulator_object: bool = True
+        self.bool_write_all_node_tree_to_file: bool = True
         self.execution_time: float = 1000.0
 
         # Point 1 of Assignment 1 PDF: Total Nodes present in the P2P cryptocurrency network
@@ -60,6 +62,7 @@ class SimulatorParameters:
         self.mining_reward_start: float = 50.0
         self.mining_reward_update_percent: float = -50.0
         self.mining_reward_update_block_time: int = 2016
+
         # ---
         self.number_of_slow_nodes: int = 0
         self.number_of_fast_nodes: int = 0
@@ -78,6 +81,8 @@ class SimulatorParameters:
         self.output_path: str = os.path.abspath(parameters['output_path'])
         self.simulator_data_filename: str = parameters['simulator_data_filename']
         os.makedirs(self.output_path, exist_ok=True)
+        self.bool_save_simulator_object: bool = parameters['bool_save_simulator_object']
+        self.bool_write_all_node_tree_to_file: bool = parameters['bool_write_all_node_tree_to_file']
         self.execution_time: float = parameters['execution_time']
 
         self.n_total_nodes: int = parameters['n_total_nodes']
@@ -152,6 +157,9 @@ class SimulatorParameters:
         print(f'Mining reward update percent    = {self.mining_reward_update_percent}')
         print(f'Mining reward update block time = {self.mining_reward_update_block_time}')
         print()
+        print(f'bool_save_simulator_object       = {self.bool_save_simulator_object}')
+        print(f'bool_write_all_node_tree_to_file = {self.bool_write_all_node_tree_to_file}')
+        print()
 
 
 class Simulator:
@@ -187,7 +195,27 @@ class Simulator:
         hash_power_percent: List[float] = list(numpy.random.random(self.simulator_parameters.n_total_nodes))
         hash_power_percent_sum = 100 / sum(hash_power_percent)
         hash_power_percent = [i * hash_power_percent_sum for i in hash_power_percent]
-
+        if self.simulator_parameters.n_total_nodes == 40:
+            hash_power_percent = [
+                33.0248221, 16.18503199, 15.08150709, 5.72361586, 5.679474863, 4.414099635, 4.149253657, 3.531279708,
+                2.611675617, 1.839208181, 1.344093339, 1.32422989, 1.250661563, 1.05202708, 0.8092515997, 0.5947999258,
+                0.1581719036, 0.1103524909, 0.0882819927, 0.0875463094, 0.0846035763, 0.08092516, 0.08092516,
+                0.0735683272, 0.0735683272, 0.0625330782, 0.0588546618, 0.0588546618, 0.0577952779, 0.0441409963,
+                0.0367841636, 0.0367841636, 0.0367841636, 0.0360484804, 0.0360484804, 0.0228061814, 0.0154493487,
+                0.0147136654, 0.0147136654, 0.0147136654
+            ]
+            g_logger.info(f'Using custom values because "n_total_nodes=40" {hash_power_percent=}')
+        if self.simulator_parameters.n_total_nodes == 49:
+            hash_power_percent = [
+                32.98114748, 16.16362764, 15.06156211, 5.7160465, 5.671963879, 4.408262082, 4.143766357, 3.526609666,
+                2.608221732, 1.836775868, 1.342315804, 1.322478625, 1.24900759, 1.050635796, 0.8081813818, 0.5940133156,
+                0.1579627246, 0.1102065521, 0.08816524165, 0.08743053128, 0.08449168988, 0.08081813821, 0.08081813821,
+                0.07347103466, 0.07347103466, 0.06245037954, 0.05877682777, 0.05877682777, 0.05771884488, 0.04408262078,
+                0.03673551733, 0.03673551733, 0.03673551733, 0.03600080706, 0.03600080706, 0.02277602071, 0.01542891727,
+                0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689,
+                0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689, 0.01469420689
+            ]
+            g_logger.info(f'Using custom values because "n_total_nodes=49" {hash_power_percent=}')
         g_logger.debug(f'{hash_power_percent=}')
 
         # Create the nodes
@@ -309,6 +337,7 @@ class Simulator:
             g_logger.debug(f'Event queue is empty, returning...')
             return False
 
+        # This is a do...while loop
         event = self.event_queue.pop()
         while True:
             self.global_time = event.event_completion_time
@@ -316,6 +345,9 @@ class Simulator:
             if self.freeze_everything_except_network:
                 if event.event_type in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_BLOCK_CREATE_SUCCESS]:
                     g_logger.debug(f'FREEZED: Time={self.get_global_time():.5f} , Event = {event.str_all()}')
+                    if event.event_type == EventType.EVENT_BLOCK_CREATE_SUCCESS:
+                        # NOTE: this is very very important
+                        self.nodes_list[event.event_receiver_id].block_generation_count -= 1
                     break
                 elif event.event_type not in [EventType.EVENT_TRANSACTION_CREATE, EventType.EVENT_RECV_TRANSACTION]:
                     g_logger.debug(f'Network: Time={self.get_global_time():.5f} , Event = {event.str_all()}')
@@ -477,14 +509,16 @@ class Node:
         self.blockchain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         self.cache_balance: Dict[str, Dict] = defaultdict(defaultdict_float)
-        self.node_hash_power_percent = hash_power_percent
+        self.node_hash_power_percent: float = hash_power_percent
         sp: SimulatorParameters = simulator.simulator_parameters
 
         # Point 7 of Assignment 1 PDF: Exponential Distribution Mean for the
         # block mining time by node.
         t_meanTk = 1 / sp.T_k_block_avg_mining_time_sec
         t_lambda = hash_power_percent * t_meanTk / 100
-        self.T_k_exp_block_mining_mean = numpy.random.exponential() / t_lambda
+        # TODO: Which among the below two lines is correct ?
+        # self.T_k_exp_block_mining_mean = numpy.random.exponential() / t_lambda
+        self.T_k_exp_block_mining_mean = 0.5 / t_lambda
 
         # This is same for all nodes
         # Point 2 of Assignment 1 PDF: Exponential Distribution Mean for inter-arrival time between transaction
@@ -805,7 +839,7 @@ class Node:
 
         self.cache_update(block_obj.prev_block_hash)
 
-        senders_balance: Dict[str, float] = defaultdict(float)
+        senders_balance: Dict[int, float] = defaultdict(float)
         senders_balance[block_obj.transactions[0].id_receiver] += block_obj.transactions[0].coin_amount
         if block_obj.transactions[0].id_sender != -1:
             senders_balance[block_obj.transactions[0].id_sender] -= block_obj.transactions[0].coin_amount
@@ -930,6 +964,7 @@ class Node:
                           f'new={block_obj.curr_block_hash}, current={self.blockchain_leafs[-1]}')
             self.change_mining_branch(block_obj.curr_block_hash)
             # Insert the block_obj into self.blockchain_leafs
+            self.blockchain_leafs.clear()
             self.blockchain_leafs.append(block_obj.curr_block_hash)
             self.cache_update(block_obj.curr_block_hash)
 
@@ -1074,7 +1109,7 @@ class Node:
         # NOTE: the below two "IF" condition will never be True if `mining_start()` and its depends work correctly
         if self.blocks_all[self.blockchain_leafs[-1]].index > block.index:
             g_logger.warning(
-                f'Problem: node_id={self.node_id}, Block mining complete but a chain '
+                f'FIXME: node_id={self.node_id}, Block mining complete but a chain '
                 f'with longer length is present in "self.blockchain_leafs"'
             )
             g_logger.warning(f'Problem: node_id={self.node_id}, '
@@ -1152,6 +1187,9 @@ class Event:
         return f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
                f'{self.event_creator_id: 2d}, {self.event_receiver_id: 2d}, {self.data_obj})'
 
+    def __lt__(self, other) -> bool:
+        return type(self) == type(other) and self.event_completion_time < other.event_completion_time
+
     def str_all(self) -> str:
         if type(self.data_obj) == Block:
             res = f'Event({self.event_type.name}, {self.event_completion_time:.2f}, ' \
@@ -1169,19 +1207,24 @@ class Event:
 class EventQueue:
     def __init__(self):
         # Tuple -> EventCompletionTime, Event
-        self.events: List[Tuple[float, Event]] = list()
+        # NOTE: have to implement < operator for "class Event" to
+        #       handle cases where the "float" value is same
+        # self.events: List[Tuple[float, Event]] = list()
+        self.events: List[Event] = list()
         self.add_new_events: bool = True
 
     def push(self, new_event: Event) -> None:
         if self.add_new_events == False:
             return
-        heapq.heappush(self.events, (new_event.event_completion_time, new_event))
+        # heapq.heappush(self.events, (new_event.event_completion_time, new_event))
+        heapq.heappush(self.events, new_event)
 
     def pop(self) -> Event:
-        return heapq.heappop(self.events)[1]
+        # return heapq.heappop(self.events)[1]
+        return heapq.heappop(self.events)
 
     def top(self) -> Event:
-        return self.events[0][1]
+        return self.events[0]
 
     def empty(self) -> bool:
         return len(self.events) == 0
@@ -1303,7 +1346,9 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
                               f'| {{NewTxnIncluded={len(block.transactions) - (miner_id != "?")}}}'
                 # The below statement is used to check if we have any block hashes which are
                 # not leaf blocks but their hashes are present in the leaf blocks list
-                if node.blockchain_leafs is not None and block.curr_block_hash in node.blockchain_leafs:
+                if node.blockchain_leafs is not None \
+                        and block.curr_block_hash != node.blockchain_leafs[-1] \
+                        and block.curr_block_hash in node.blockchain_leafs:
                     g_logger.debug(f'{block.curr_block_hash=} , {block.prev_block_hash=} , {point_count=}')
                 if block.prev_block_hash == '-1':  # it is genesis block, color=light blue
                     g_genesis.node(name=str(node.node_id) + '_' + block.curr_block_hash, label=block_label,
@@ -1323,7 +1368,9 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
                           f'| {{NewTxnIncluded={len(block.transactions) - (miner_id != "?")}}}'
             # The below statement is used to check if we have any block hashes which are
             # not leaf blocks but their hashes are present in the leaf blocks list
-            if node.blockchain_leafs is not None and block.curr_block_hash in node.blockchain_leafs:
+            if node.blockchain_leafs is not None \
+                    and block.curr_block_hash != node.blockchain_leafs[-1] \
+                    and block.curr_block_hash in node.blockchain_leafs:
                 g_logger.debug(f'{block.curr_block_hash=} , {block.prev_block_hash=} , {point_count=}')
             if block.prev_block_hash == '-1':  # it is genesis block, color=light blue
                 # g_genesis.node(name=str(node.node_id) + '_' + block.curr_block_hash, label=block_label,
@@ -1417,16 +1464,27 @@ def simulator_visualization(mySimulator: Simulator) -> None:
 
 def simulation_analysis(mySimulator: Simulator) -> None:
     """This function is used to analyze the simulation results"""
+
+    # NOTE: we do not add 1 in the numerator because the genesis block is not mined by any miner
+    network_longest_blockchain_length: int = max([
+        node.blocks_all[node.blockchain_leafs[-1]].index for node in mySimulator.nodes_list
+    ])
+    # noinspection PyTypeChecker
     hash_power_median: float = numpy.median([node.node_hash_power_percent for node in mySimulator.nodes_list])
+
+    print('---Each Node Stats---')
+    # Ratio 1,2,4
+    node_ratios: List[Tuple[float, float, float]] = list()
     for node in mySimulator.nodes_list:
         print('\nNode id = {node.node_id}')
-        total_blocks = len(node.blocks_all)
+        # total_blocks = len(node.blocks_all)
 
         # Points to the last block of the longest blockchain known to "node.node_id"
         block = node.blocks_all[node.blockchain_leafs[-1]]
 
-        # Total blocks in the longest blockchain known to "node.node_id"
-        len_longest_chain = block.index + 1
+        # # Total blocks in the longest blockchain known to "node.node_id"
+        # len_longest_chain = block.index + 1
+
         # Total blocks in the longest blockchain known to "node.node_id" which are mined it
         node_blocks_in_longest_chain = 0
 
@@ -1436,6 +1494,8 @@ def simulation_analysis(mySimulator: Simulator) -> None:
             if block.transactions[0].id_receiver == node.node_id:
                 node_blocks_in_longest_chain += 1
             block = node.blocks_all[block.prev_block_hash]
+
+        print(f'Node hashing power = {node.node_hash_power_percent} %')
 
         if node.is_malicious:
             print('Node is an Attacker')
@@ -1450,17 +1510,62 @@ def simulation_analysis(mySimulator: Simulator) -> None:
         else:
             print('CPU Power = Low', sep='\t')
 
-        # Ratio of:
-        #   numerator   = number of blocks generated by the node in the Longest Chain of the tree
-        #   denominator = total number of blocks the node generates at the end of the simulation
-        print(f'Ratio (node_blocks_in_longest_chain / node.block_generation_count) = '
-              f'{node_blocks_in_longest_chain / node.block_generation_count}')
+        # Ratio 1:
+        #   numerator   = number of blocks mined by the node in the Longest Chain known to itself
+        #   denominator = total number of blocks the node mines at the end of the simulation
+        ratio1_val = None
+        if node_blocks_in_longest_chain == 0:
+            ratio1_val = 0
+        elif node.block_generation_count == 0:
+            ratio1_val = float('inf')
+        else:
+            ratio1_val = node_blocks_in_longest_chain / node.block_generation_count
+        print(f'Ratio 1 (node_blocks_in_longest_chain / node.block_generation_count) = '
+              f'({node_blocks_in_longest_chain} / {node.block_generation_count}) = {ratio1_val}')
+        # Ratio 2:
+        #   numerator   = fraction of "number of blocks mined by the node in the longest blockchain" to
+        #                             "length of the network longest blockchain"
+        #   denominator = mining power of the node in range [0, 1] (not in percentage)
+        ratio2_val = (node_blocks_in_longest_chain / network_longest_blockchain_length) \
+                     / (node.node_hash_power_percent / 100)
+        print(f'Ratio 2 (fraction of node_blocks_in_longest_chain / (node.node_hash_power_percent / 100)) = '
+              f'{ratio2_val}')
+        # Ratio 4:
+        #   numerator   = number of blocks in main chain by the node
+        #   denominator = total number of blocks in the network longest chain
+        ratio4_val = node_blocks_in_longest_chain / network_longest_blockchain_length
+        print(f'Ratio 4 (node_blocks_in_longest_chain / network_longest_blockchain_length) = {ratio4_val}')
+
+        node_ratios.append((
+            ratio1_val,
+            ratio2_val,
+            ratio4_val
+        ))
+
+    print('\n---Each Node Stats Arrays---')
+    print('\nHash Power of Each Node =', [node.node_hash_power_percent for node in mySimulator.nodes_list])
+    print('\nRatio 1 (node_blocks_in_longest_chain / node.block_generation_count) =', [i[0] for i in node_ratios])
+    print('\nRatio 2 (fraction of node_blocks_in_longest_chain / (node.node_hash_power_percent / 100)) =',
+          [i[1] for i in node_ratios])
+    print('\nRatio 4 (node_blocks_in_longest_chain / network_longest_blockchain_length) =',
+          [i[2] for i in node_ratios])
+
+    print('\n---Global Stats---')
+    # Ratio 3:
+    #   numerator   = number of blocks mined by the whole network that are in the main chain
+    #   denominator = total number of blocks mined by the whole network
+    network_total_blocks_mined: int = sum([
+        node.block_generation_count for node in mySimulator.nodes_list
+    ])
+    print(f'Ratio (blocks in longest chain / total blocks mined) = '
+          f'{network_longest_blockchain_length} / {network_total_blocks_mined} = '
+          f'{network_longest_blockchain_length / network_total_blocks_mined}')
     pass
 
 
 def debug_stats(mySimulator: Simulator):
     g_logger = logging.getLogger(__name__)
-    os.chdir('src')
+    os.chdir('src1')
     mySimulator = joblib.load('./blockchains/mySimulator.pkl')
     for node in mySimulator.nodes_list:
         print(node.blockchain_leafs, node.blocks_all[node.blockchain_leafs[-1]].index)
@@ -1524,21 +1629,22 @@ def Main(args: Dict):
             g_logger.info('No events present in the event queue. Exiting...')
             break
         # input()
-    print(r'\nExecution 100% complete :)', file=sys.stderr)
+    print('\nExecution 100% complete :)', file=sys.stderr)
 
-    print(r'\nSaving results...', file=sys.stderr)
-    if sp.simulator_data_filename != '':
+    print('\nSaving results...', file=sys.stderr)
+    if sp.bool_save_simulator_object and sp.simulator_data_filename != '':
         g_logger.info(f'Saving all the progress of simulator to "{sp.simulator_data_filename}"')
         joblib.dump(mySimulator, os.path.join(sp.output_path, sp.simulator_data_filename), compress=2)
-    mySimulator.write_all_node_tree_to_file()
+    if sp.bool_write_all_node_tree_to_file:
+        mySimulator.write_all_node_tree_to_file()
 
-    print(r'\nVisualization in progress...', file=sys.stderr)
+    print('\nVisualization in progress...', file=sys.stderr)
     simulator_visualization(mySimulator)
     simulation_analysis(mySimulator)
 
     g_logger.info(f'Successfully completed executing the simulator for "{sp.execution_time}" seconds')
 
-    print(r'\nCompleted :)', file=sys.stderr)
+    print('\nCompleted :)', file=sys.stderr)
 
 
 if __name__ == '__main__':
