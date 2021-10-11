@@ -328,7 +328,7 @@ class Simulator:
         Point 4 of Assignment-1 PDF: create a connected network of nodes
         NOTE: the graph is an undirected graph
         """
-        # REFER: https://www.scitepress.org/Papers/2014/49373/49373.pdf  
+        # REFER: https://www.scitepress.org/Papers/2014/49373/49373.pdf
         # REFER: https://networkx.org/documentation/networkx-1.9.1/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html
         # REFER: https://www.geeksforgeeks.org/barabasi-albert-graph-scale-free-models/
         # REFER: https://stackoverflow.com/questions/2041517/random-simple-connected-graph-generation-with-given-sparseness
@@ -580,6 +580,7 @@ class Node:
         self.is_infected: bool = is_infected
         self.is_attacker: bool = is_attacker
         self.last_change_branch_time: float = -1.0
+        # Number of successfully mined blocks (the mined block may/may not be in the longest chain)
         self.block_generation_count: int = 0
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
@@ -1135,8 +1136,8 @@ class Node:
                     self.block_send(self.blocks_all[last_block_private_chain_hash], node)
                 self.blockchain_leafs[-1] = last_block_private_chain_hash
             elif deltaPrivatePublic == 2:
-                ''' 
-                Honest miners close down the attacker's lead to 1, so if the attacker is selfish, it will 
+                '''
+                Honest miners close down the attacker's lead to 1, so if the attacker is selfish, it will
                 publish the entire private chain. If the attacker is stubborn, it will reveal only the next
                 block on it's private chain only to match the length of the public chain.
                 '''
