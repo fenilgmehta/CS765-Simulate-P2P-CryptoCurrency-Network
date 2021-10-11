@@ -28,13 +28,12 @@ from threading import Lock
 # sure that we are importing GTK + 3.
 gi.require_version("Gtk", "3.0")
 
+# noinspection PyUnresolvedReferences
 from gi.repository import Gtk, GLib
 
 g_logger = None
-
-hash_power_median = 0
-
 gui_lock = Lock()
+
 
 def defaultdict_float():
     return defaultdict(float)
@@ -51,15 +50,17 @@ class SimulatorParameters:
         # Point 1 of Assignment-1 PDF: Total Nodes present in the P2P cryptocurrency network
         self.n_total_nodes: int = 50
         # Point 1 of Assignment-1 PDF: z% of nodes are slow
-        self.z_percent_slow_nodes: float = 50.0
-        # Infected nodes percent (infected nodes are those who generate invalid transaction(s))
+        self.z_percent_honest_slow_nodes: float = 50.0
+        # Infected honest nodes percent (infected nodes are those who generate invalid transaction(s))
         self.percent_infected_nodes: float = 0.0
         # Number of individual attacker nodes
-        self.number_of_individual_attacker_nodes = 0
-        # Attacker node type: Can be either selfish or stubborn (default: selfish)
-        self.attacker_node_type = "selfish"
+        self.number_of_individual_attacker_nodes: int = 0
+        # Attacker node type: Can be either "selfish" or "stubborn" (default: selfish)
+        self.attacker_node_type: str = "selfish"
+        # Hash power of each attacker node
+        self.individual_attacker_node_CPU_power_of_total: float = 20.0
         # Percentage of honest nodes the attacker is connected to
-        self.zeta_attacker_connected_to_honest_nodes_percent = 50
+        self.zeta_attacker_connected_to_honest_nodes_percent: float = 50.0
         # Max delay between two blocks created, in seconds
         self.max_block_creation_delay_sec: float = 7200.0
 
@@ -74,11 +75,12 @@ class SimulatorParameters:
         self.max_light_delay_sec: float = 0.500
         self.node_initial_coins_low: float = 10.0  # used to initialize the genesis block
         self.node_initial_coins_high: float = 50.0  # used to initialize the genesis block
-        self.max_transactions_per_block: int = 1000  # Point 7 of PDF: max transactions a block can store
+        self.max_transactions_per_block: int = 1000  # Point 7 of Assignment-1 PDF: max transactions a block can store
         self.mining_reward_start: float = 50.0
         self.mining_reward_update_percent: float = -50.0
         self.mining_reward_update_block_time: int = 2016
         # ---
+        self.n_total_honest_nodes: int = 0
         self.number_of_slow_nodes: int = 0
         self.number_of_fast_nodes: int = 0
         self.number_of_infected_nodes: int = 0
@@ -99,23 +101,20 @@ class SimulatorParameters:
         self.execution_time: float = parameters['execution_time']
 
         self.n_total_nodes: int = parameters['n_total_nodes']
-        # Number of individual attacker nodes
-        self.number_of_individual_attacker_nodes = parameters['number_of_individual_attacker_nodes']
-        # Attacker node type
-        self.attacker_node_type = parameters['attacker_node_type']
-
-        if self.attacker_node_type != "selfish" and self.attacker_node_type != "stubborn":
-            g_logger.error(f'Invalid attacker node type specified. The only possible values are "selfish" and "stubborn".')
-
-        self.n_total_honest_nodes: int = self.n_total_nodes - self.number_of_individual_attacker_nodes
-        self.z_percent_slow_nodes: float = parameters['z_percent_slow_nodes']
+        self.z_percent_honest_slow_nodes: float = parameters['z_percent_honest_slow_nodes']
         self.percent_infected_nodes: float = parameters['percent_infected_nodes']
 
-        # Hash power of each attacker node
-        self.individual_attacker_node_CPU_power_of_total = parameters['individual_attacker_node_CPU_power_of_total']
+        self.number_of_individual_attacker_nodes: int = parameters['number_of_individual_attacker_nodes']
+        self.attacker_node_type: str = parameters['attacker_node_type']
+        if self.attacker_node_type not in ('selfish', 'stubborn'):
+            g_logger.error('Invalid "attacker_node_type" specified. Only "selfish" and "stubborn" are valid')
+            g_logger.warning('Using default value of self.attacker_node_type="selfish"')
+            self.attacker_node_type = 'selfish'
 
-        # Percentage of honest nodes the attacker is connected to
-        self.zeta_attacker_connected_to_honest_nodes_percent = parameters['zeta_attacker_connected_to_honest_nodes_percent']
+        self.individual_attacker_node_CPU_power_of_total: float = \
+            parameters['individual_attacker_node_CPU_power_of_total']
+        self.zeta_attacker_connected_to_honest_nodes_percent: float = \
+            parameters['zeta_attacker_connected_to_honest_nodes_percent']
 
         self.max_block_creation_delay_sec: float = parameters['max_block_creation_delay_sec']
 
@@ -135,30 +134,57 @@ class SimulatorParameters:
         self.mining_reward_update_block_time: int = parameters['mining_reward_update_block_time']
 
         # ---
+        # number of attacker nodes in the network
+        if self.number_of_individual_attacker_nodes < 0:
+            g_logger.error(f'Condition not satisfied: 0 <= number_of_individual_attacker_nodes <= {self.n_total_nodes}')
+            g_logger.warning('Making ZERO nodes as attacker because "number_of_individual_attacker_nodes < 0"')
+            self.number_of_individual_attacker_nodes = 0
+        elif self.number_of_individual_attacker_nodes > self.n_total_nodes:
+            g_logger.error(f'Condition not satisfied: 0 <= number_of_individual_attacker_nodes <= {self.n_total_nodes}')
+            g_logger.warning(f'Making ALL nodes as attackers because '
+                             f'"number_of_individual_attacker_nodes > {self.n_total_nodes}"')
+            self.number_of_individual_attacker_nodes = self.n_total_nodes
+
+        if self.number_of_individual_attacker_nodes * self.individual_attacker_node_CPU_power_of_total > 100:
+            g_logger.error(
+                f'CPU power of attackers (i.e. AttackerNodes * EachAttackersPower = '
+                f'{self.number_of_individual_attacker_nodes * self.individual_attacker_node_CPU_power_of_total}:.1f) % '
+                f'exceed 100%'
+            )
+            self.number_of_individual_attacker_nodes = 100 // self.individual_attacker_node_CPU_power_of_total
+            g_logger.warning(f'Making number_of_individual_attacker_nodes = {self.number_of_individual_attacker_nodes}')
+            g_logger.warning(
+                f'Hashing power held by attackers = '
+                f'{self.number_of_individual_attacker_nodes * self.individual_attacker_node_CPU_power_of_total:.1f} %'
+            )
+
+        self.n_total_honest_nodes: int = self.n_total_nodes - self.number_of_individual_attacker_nodes
+
         # z% of the honest nodes are slow
-        self.number_of_slow_nodes: int = int(self.n_total_honest_nodes * self.z_percent_slow_nodes) // 100
+        self.number_of_slow_nodes: int = int(self.n_total_honest_nodes * self.z_percent_honest_slow_nodes) // 100
 
         if self.number_of_slow_nodes < 0:
-            g_logger.error('Condition not satisfied: 0 <= z_percent_slow_nodes <= 100')
-            g_logger.warning('Making ZERO nodes as slow because "z_percent_slow_nodes < 0"')
+            g_logger.error('Condition not satisfied: 0 <= z_percent_honest_slow_nodes <= 100')
+            g_logger.warning('Making ZERO nodes as slow because "z_percent_honest_slow_nodes < 0"')
             self.number_of_slow_nodes = 0
         elif self.number_of_slow_nodes > self.n_total_nodes:
-            g_logger.error('Condition not satisfied: 0 <= z_percent_slow_nodes <= 100')
-            g_logger.warning('Making ALL nodes as slow because "z_percent_slow_nodes > 100"')
+            g_logger.error('Condition not satisfied: 0 <= z_percent_honest_slow_nodes <= 100')
+            g_logger.warning('Making ALL nodes as slow because "z_percent_honest_slow_nodes > 100"')
             self.number_of_slow_nodes = self.n_total_nodes
 
-        # (100 - z)% nodes are fast
+        # Number of fast honest nodes
         self.number_of_fast_nodes: int = self.n_total_honest_nodes - self.number_of_slow_nodes
 
-        # number of infected (infected honest nodes which might generate invalid transaction(s)) nodes in the network
+        # Number of infected honest nodes in the network
+        #   -> Those nodes which might generate invalid transaction(s) / block(s)
         self.number_of_infected_nodes: int = int(self.n_total_honest_nodes * self.percent_infected_nodes) // 100
         if self.number_of_infected_nodes < 0:
             g_logger.error('Condition not satisfied: 0 <= percent_infected_nodes <= 100')
-            g_logger.warning('Making ZERO nodes as infected because "percent_infected_nodes < 0"')
+            g_logger.warning('Making ZERO honest nodes as infected because "percent_infected_nodes < 0"')
             self.number_of_infected_nodes = 0
         elif self.number_of_infected_nodes > self.n_total_honest_nodes:
             g_logger.error('Condition not satisfied: 0 <= percent_infected_nodes <= 100')
-            g_logger.warning('Making ALL nodes as infected because "percent_infected_nodes > 100"')
+            g_logger.warning('Making ALL honest nodes as infected because "percent_infected_nodes > 100"')
             self.number_of_infected_nodes = self.n_total_honest_nodes
 
     def log_parameters(self):
@@ -166,10 +192,18 @@ class SimulatorParameters:
         print(f'Execution Time = {self.execution_time} seconds')
         print()
         print(f'      n  = Number of peers specified in the config file : {self.n_total_nodes}')
-        print(f'      z  = {self.z_percent_slow_nodes=} %')
+        print(f'      z  = {self.z_percent_honest_slow_nodes=} %')
         print(f'      z% = Number of slow nodes : {self.number_of_slow_nodes}')
         print(f'(100-z)% = Number of fast nodes : {self.number_of_fast_nodes}')
-        print(f' Number of infected nodes : {self.number_of_infected_nodes}')
+        print(f'Number of infected honest nodes : {self.number_of_infected_nodes}')
+        print()
+        print(f'Number of individual attacker nodes = {self.number_of_individual_attacker_nodes}')
+        print(f'CPU Power of an individual attacker node of the total networks CPU power = '
+              f'{self.individual_attacker_node_CPU_power_of_total}')
+        print(f'Total CPU power of honest nodes = '
+              f'{100 - self.number_of_individual_attacker_nodes * self.individual_attacker_node_CPU_power_of_total}')
+        print(f'ζ = fraction of honest nodes an adversary is connected to = '
+              f'{self.zeta_attacker_connected_to_honest_nodes_percent}')
         print()
         print(f'    T_tx = (seconds) Exponential Distribution -> '
               f'Transaction Inter-arrival Mean = {self.T_tx_exp_txn_interarrival_mean_sec}')
@@ -198,7 +232,7 @@ class Simulator:
         pass
 
     def initialize(self) -> None:
-        global g_logger, hash_power_median
+        global g_logger
 
         # GENESIS_BLOCK = self.__create_genesis_block()
         GENESIS_BLOCK = self.__create_genesis_block_v2_empty()
@@ -211,17 +245,19 @@ class Simulator:
             for i in range(self.simulator_parameters.n_total_honest_nodes)
         ]
         numpy.random.shuffle(list_infected)
-        debug_infected_idx: List[int] = list()
+        list_infected_idx: List[int] = list()
         for i in range(self.simulator_parameters.n_total_honest_nodes):
             if list_infected[i]:
-                debug_infected_idx.append(i)
-        g_logger.debug(f'{debug_infected_idx=}')
+                list_infected_idx.append(i)
+        g_logger.debug(f'{list_infected_idx=}')
 
         # Point 7 of PDF: Randomly generate CPU power of the nodes
         hash_power_percent: List[float] = list(numpy.random.random(self.simulator_parameters.n_total_honest_nodes))
-        hash_power_percent_sum = (100 - (self.simulator_parameters.number_of_individual_attacker_nodes * self.simulator_parameters.individual_attacker_node_CPU_power_of_total)) / sum(hash_power_percent)
-        hash_power_percent = [i * hash_power_percent_sum for i in hash_power_percent]
-        hash_power_median = numpy.median(hash_power_percent)
+        hash_power_percent_factor = (100 - (
+                self.simulator_parameters.number_of_individual_attacker_nodes
+                * self.simulator_parameters.individual_attacker_node_CPU_power_of_total
+        )) / sum(hash_power_percent)
+        hash_power_percent = [i * hash_power_percent_factor for i in hash_power_percent]
 
         g_logger.debug(f'{hash_power_percent=}')
 
@@ -235,12 +271,17 @@ class Simulator:
         # Adding individual attacker nodes to the nodes_list
         for a_i in range(self.simulator_parameters.number_of_individual_attacker_nodes):
             self.nodes_list.append(
-                Node(len(self.nodes_list), self, self.simulator_parameters.individual_attacker_node_CPU_power_of_total,
-                     True, False, True, GENESIS_BLOCK))
+                Node(
+                    len(self.nodes_list), self, self.simulator_parameters.individual_attacker_node_CPU_power_of_total,
+                    True, False, True, GENESIS_BLOCK
+                )
+            )
 
         # Create a connected graph
-        # Point 4 of the Assignment-1 problem statement PDF
+        # Point 4 of Assignment-1 problem statement PDF
+        g_logger.debug('Creating the network graph...')
         self.__create_connected_graph()
+        g_logger.debug('Network graph created :)')
 
         # Begin the infinite random transaction creation process
         # While handling an old transaction, a new transaction is created
@@ -283,7 +324,10 @@ class Simulator:
         return Block('-1', 0.0, 0, list(), 0.0, 0.0)
 
     def __create_connected_graph(self) -> None:
-        """Point 4 of the Assignment-1 PDF: create a connected network of nodes"""
+        """
+        Point 4 of Assignment-1 PDF: create a connected network of nodes
+        NOTE: the graph is an undirected graph
+        """
         # REFER: https://www.scitepress.org/Papers/2014/49373/49373.pdf  
         # REFER: https://networkx.org/documentation/networkx-1.9.1/reference/generated/networkx.generators.random_graphs.barabasi_albert_graph.html
         # REFER: https://www.geeksforgeeks.org/barabasi-albert-graph-scale-free-models/
@@ -295,14 +339,14 @@ class Simulator:
         # Total honest nodes in the graph
         n_honest: int = self.simulator_parameters.n_total_honest_nodes
 
-        # Creating the barabasi albert graph for 'n_honest' nodes, connecting the honest nodes according to
-        # power law degree distribution
+        # Creating the barabasi albert graph for 'n_honest' nodes, connecting
+        # the honest nodes according to power law degree distribution
         g: nx.classes.graph.Graph = nx.barabasi_albert_graph(
             n_honest,
             random.randint(1, 10 if n_honest > 10 else max(1, n_honest - 1))
         )
 
-        # Point 5 of the PDF - latency time between sender "i" and receiver "j" for a message "m"
+        # Point 5 of Assignment-1 PDF - latency time between sender "i" and receiver "j" for a message "m"
         #   ρ_ij is a positive minimum value corresponding to the speed of light propagation delay
         #   ρ_ij time is stored in "seconds"
 
@@ -310,7 +354,7 @@ class Simulator:
         adj_mat: List[List[int]] = [[0 for i in range(n)] for j in range(n)]
         for i in range(n):
             for j in range(n):
-                # Point 5 of the PDF
+                # Point 5 of Assignment-1 PDF
                 adj_mat[i][j] = 0.010 + numpy.random.random() * (0.500 - 0.010)
 
         for edge in g.edges():
@@ -335,10 +379,13 @@ class Simulator:
         # Connecting the attacker nodes to the honest nodes
         for a_i in range(self.simulator_parameters.number_of_individual_attacker_nodes):
             # Select random honest nodes to be connected
-            temp_n_neighbors = int((self.simulator_parameters.zeta_attacker_connected_to_honest_nodes_percent * n_honest)/100)
-
-            temp_neighbors_list = random.sample(self.nodes_list[:-1*self.simulator_parameters.number_of_individual_attacker_nodes], temp_n_neighbors)
-
+            temp_n_neighbors = int(
+                (n_honest * self.simulator_parameters.zeta_attacker_connected_to_honest_nodes_percent) / 100
+            )
+            temp_neighbors_list = random.sample(
+                self.nodes_list[:(-self.simulator_parameters.number_of_individual_attacker_nodes)],
+                temp_n_neighbors
+            )
             attacker_node_id = n_honest + a_i
 
             # Adding the attacker node into the graph
@@ -348,15 +395,22 @@ class Simulator:
                 temp_neighbor_id = temp_neighbor.node_id
                 # c_ij = 5 Mbps (if any of the nodes is slow)
                 c_ij = 5 * 1_000_000
-                if self.nodes_list[temp_neighbor_id].is_network_fast and self.nodes_list[attacker_node_id].is_network_fast:
+                # NOTE: According to Assignment-2 PDF, attackers are always fast.
+                #       Hence, no need to check attackers network type. However, for
+                #       future updates, this check can be required.
+                if self.nodes_list[temp_neighbor_id].is_network_fast \
+                        and self.nodes_list[attacker_node_id].is_network_fast:
                     # c_ij = 100 Mbps (if both the nodes are fast)
                     c_ij = 100 * 1_000_000
-                self.nodes_list[temp_neighbor_id].add_new_peer(attacker_node_id, adj_mat[temp_neighbor_id][attacker_node_id], c_ij)
-                self.nodes_list[attacker_node_id].add_new_peer(temp_neighbor_id, adj_mat[attacker_node_id][temp_neighbor_id], c_ij)
+                self.nodes_list[temp_neighbor_id].add_new_peer(attacker_node_id,
+                                                               adj_mat[temp_neighbor_id][attacker_node_id], c_ij)
+                self.nodes_list[attacker_node_id].add_new_peer(temp_neighbor_id,
+                                                               adj_mat[attacker_node_id][temp_neighbor_id], c_ij)
                 g.add_edge(attacker_node_id, temp_neighbor_id)
 
         nx.draw(g, with_labels=True)
-        plt.show()
+        plt.savefig(f'{self.simulator_parameters.output_path}/graph.png')
+        # plt.show()
 
     def freeze(self) -> None:
         self.freeze_everything_except_network = True
@@ -460,7 +514,7 @@ class Transaction:
     def size() -> int:
         """
         Returns size in Bytes
-        NOTE: Size is assumed to be 1KB (According to the Assignment-1 PDF)
+        NOTE: Size is assumed to be 1KB (According to Assignment-1 PDF)
         """
         return 1000
 
@@ -520,13 +574,13 @@ class Node:
 
     def __init__(self, node_id: int, simulator: Simulator, hash_power_percent: float, is_network_fast: bool,
                  is_infected: bool, is_attacker: bool, GENESIS_BLOCK: Block):
-        self.node_id = node_id
+        self.node_id: int = node_id
         self.simulator: Simulator = simulator
-        self.is_network_fast = is_network_fast
+        self.is_network_fast: bool = is_network_fast
         self.is_infected: bool = is_infected
         self.is_attacker: bool = is_attacker
         self.last_change_branch_time: float = -1.0
-        self.block_generation_count = 0
+        self.block_generation_count: int = 0
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
         # The time at which a new block with chain length > local chain length is received
@@ -544,18 +598,19 @@ class Node:
         self.private_chain: List[str] = []
 
         self.cache_balance: Dict[str, Dict] = defaultdict(defaultdict_float)
-        self.node_hash_power_percent = hash_power_percent
+        self.node_hash_power_percent: float = hash_power_percent  # Range [0, 100] %
         sp: SimulatorParameters = simulator.simulator_parameters
 
-        # Point 7 of the Assignment-1 PDF: Exponential Distribution Mean for the
+        # Point 7 of Assignment-1 PDF: Exponential Distribution Mean for the
         # block mining time by node.
         t_meanTk = 1 / sp.T_k_block_avg_mining_time_sec
         t_lambda = hash_power_percent * t_meanTk / 100
         # TODO: Which among the below two lines is correct ?
         # self.T_k_exp_block_mining_mean = numpy.random.exponential() / t_lambda
-        self.T_k_exp_block_mining_mean = 0.5 / t_lambda
+        self.T_k_exp_block_mining_mean = 1.0 / t_lambda
+
         # This is same for all nodes
-        # Point 2 of the Assignment-1 PDF: Exponential Distribution Mean for inter-arrival time between transaction
+        # Point 2 of Assignment-1 PDF: Exponential Distribution Mean for inter-arrival time between transaction
         self.T_tx_exp_txn_interarrival_mean_sec = sp.T_tx_exp_txn_interarrival_mean_sec
 
         # This is same for all nodes
@@ -590,7 +645,7 @@ class Node:
             self.c_ij: int = c_ij
 
         def find_message_latency(self, message_size_bits: int) -> float:
-            # Point 5 of the Assignment-1 PDF
+            # Point 5 of Assignment-1 PDF
             #   - dij is the queuing delay at senders side (i.e. node i)
             #   - dij is randomly chosen from an exponential distribution with some mean `96kbits/c_ij`
             #   - NOTE: d_ij must be randomly chosen for each message transmitted from "i" to "j"
@@ -773,7 +828,7 @@ class Node:
 
     def transaction_create(self):
         """
-        Point 2 of the Assignment-1 PDF: Generate Transaction and add it to the event queue
+        Point 2 of Assignment-1 PDF: Generate Transaction and add it to the event queue
           - Randomly Select a node for receiver
           - Coin Amount : generate randomly based on current balance
         """
@@ -923,7 +978,7 @@ class Node:
 
         self.cache_update(block_obj.prev_block_hash)
 
-        senders_balance: Dict[str, float] = defaultdict(float)
+        senders_balance: Dict[int, float] = defaultdict(float)
         senders_balance[block_obj.transactions[0].id_receiver] += block_obj.transactions[0].coin_amount
         if block_obj.transactions[0].id_sender != -1:
             senders_balance[block_obj.transactions[0].id_sender] -= block_obj.transactions[0].coin_amount
@@ -932,8 +987,8 @@ class Node:
                 g_logger.debug(f'Block: Only first transaction can be mining reward transaciton')
                 return -1  # Only FIRST transaction can be mining reward transaction
             if txn.id_sender not in self.cache_balance[block_obj.prev_block_hash]:
-                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {str(self.cache_balance)}, '
-                               f'{block_obj.str_all()=}')
+                g_logger.debug(f'Cache: Something strange, {txn.id_sender}, {block_obj.prev_block_hash=}, '
+                               f'{str(self.cache_balance)}, {block_obj.str_all()=}')
             senders_curr_balance: float = senders_balance[txn.id_sender] \
                                           + self.cache_balance[block_obj.prev_block_hash][txn.id_sender]
 
@@ -945,7 +1000,7 @@ class Node:
                 # TODO: remove the below "if" statement as it is only for find logical bug in the simulator
                 if self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
                     g_logger.debug(f'FIXME: cache is not working properly, Cache: Something strange, '
-                                   f'{txn.id_sender}, {str(self.cache_balance)}, {block_obj.str_all()=}')
+                                   f'{txn.id_sender}, {block_obj.prev_block_hash=}, {str(self.cache_balance)}, {block_obj.str_all()=}')
                     continue
                 return -1
             # if not self.is_transaction_valid(txn, block_obj.prev_block_hash, senders_balance[txn.id_sender]):
@@ -1162,7 +1217,7 @@ class Node:
         # )
 
     def get_new_block(self) -> Tuple[bool, Union[Block, None]]:
-        # Point 7 of the Assignment-1 PDF
+        # Point 7 of Assignment-1 PDF
         curr_tail = self.blockchain_leafs[-1]
 
         # If the private chain is empty, the attacker will mine on the latest block of the longest
@@ -1281,7 +1336,8 @@ class Node:
 
             deltaPrivatePublic = 0
             if len(self.private_chain) > 0:
-                deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - self.blocks_all[self.blockchain_leafs[-1]].index
+                deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - \
+                                     self.blocks_all[self.blockchain_leafs[-1]].index
             if deltaPrivatePublic >= 0:
                 # Appending new block to the private chain
                 self.private_chain.append(block.curr_block_hash)
@@ -1590,8 +1646,9 @@ def plot_graph_allone(nodes_list: List[Node], save_to_file: bool, base_path: str
 
 def simulator_visualization(mySimulator: Simulator) -> None:
     try:
-        print()
-        print('Enter the input to VIEW/STORE (0/1) and (IndexN/all/allone/combo) '
+        print(f'\nAttacker Node Idx = {[node.node_id for node in mySimulator.nodes_list if node.is_attacker]}')
+        print(f'\nInfected Node Idx = {[node.node_id for node in mySimulator.nodes_list if node.is_infected]}')
+        print('\nEnter the input to VIEW/STORE (0/1) and (IndexN/all/allone/combo) '
               'of node of the graph on the same line')
         print('Input format: ^$ , 0 N , 1 (N|all|allone|combo)')
         print('Enter blank line to exit this')
@@ -1642,7 +1699,9 @@ def simulator_visualization(mySimulator: Simulator) -> None:
 
 def simulation_analysis(mySimulator: Simulator) -> None:
     """This function is used to analyze the simulation results"""
-    global hash_power_median
+    hash_power_median = numpy.median([
+        node.node_hash_power_percent for node in mySimulator.nodes_list if not node.is_attacker
+    ])
 
     # NOTE: we do not add 1 in the numerator because the genesis block is not mined by any miner
     network_longest_blockchain_length: int = max([
@@ -1675,17 +1734,24 @@ def simulation_analysis(mySimulator: Simulator) -> None:
         print(f'Node hashing power = {node.node_hash_power_percent} %')
 
         if node.is_attacker:
-            print('Node is an Attacker')
+            print('Attacker', end=',')
+        else:
+            print('Honest__', end=',')
+
+        if node.is_infected:
+            print('___Infected', end=',')
+        else:
+            print('NotInfected', end=',')
 
         if node.is_network_fast:
-            print('Node type = Fast', sep='\t')
+            print('Node type = Fast', end=',')
         else:
-            print('Node type = Slow', sep='\t')
+            print('Node type = Slow', end=',')
 
         if node.node_hash_power_percent > hash_power_median:
-            print('CPU Power = High', sep='\t')
+            print('CPU Power = High', end=',')
         else:
-            print('CPU Power = Low', sep='\t')
+            print('CPU Power = Low_', end=',')
 
         # Ratio 1:
         #   numerator   = number of blocks mined by the node in the Longest Chain known to itself
@@ -1907,8 +1973,8 @@ def Main(args: Dict):
     gui_lock.acquire()
     win.progress_percent = 1.0
     win.progress_label = 'Completed :)'
-    print('Please close the Progress Window')
     gui_lock.release()
+    print('Please close the Progress Window')
     thread.join()
 
 
@@ -1943,11 +2009,11 @@ if __name__ == '__main__':
     #            - https://github.com/xolox/python-coloredlogs
     if args.debug:
         # g_logger.setLevel(logging.DEBUG)
-        coloredlogs.install(fmt='%(levelname)-8s :: [%(lineno)4s] %(name)10s :: %(message)s', level='DEBUG',
+        coloredlogs.install(fmt='%(levelname)-5s [%(lineno)4s]: %(message)s', level='DEBUG',
                             logger=g_logger)
     else:
         # g_logger.setLevel(logging.INFO)
-        coloredlogs.install(fmt='%(levelname)-8s :: [%(lineno)4s] %(name)10s :: %(message)s', level='INFO',
+        coloredlogs.install(fmt='%(levelname)-5s [%(lineno)4s]: %(message)s', level='INFO',
                             logger=g_logger)
 
     g_logger.debug('Debugging is ON')
