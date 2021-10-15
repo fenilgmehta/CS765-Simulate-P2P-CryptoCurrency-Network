@@ -1070,6 +1070,8 @@ class Node:
             m_block_send_all_except(block_obj, senders_id)
 
         # Check "self.blocks_unvalidated" and updated "block_obj"
+        #   If a block whose successors already received, then "block_obj"
+        #   will be updated to point to the last block in that chain
         while True:
             end_while_loop = True
             for blk_hash, (blk_sender_id, blk_obj) in self.blocks_unvalidated.items():
@@ -1081,7 +1083,8 @@ class Node:
                     end_while_loop = False
                     block_obj = blk_obj
                     self.blocks_all[blk_hash] = blk_obj
-                    m_block_send_all_except(blk_obj, blk_sender_id)
+                    if not self.is_attacker:
+                        m_block_send_all_except(blk_obj, blk_sender_id)
                     g_logger.info(f'node_id={self.node_id}, '
                                   f'Successfully processed an unvalidated block block={blk_obj}')
                     self.blocks_unvalidated.pop(blk_hash)
@@ -1107,6 +1110,7 @@ class Node:
 
         # Difference between the length of the private chain and the public chain
         deltaPrivatePublic = 0
+        block_obj_extends_current_chain = block_obj.index > self.blocks_all[self.blockchain_leafs[-1]].index
         if len(self.private_chain) > 0:
             deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - \
                                  self.blocks_all[self.blockchain_leafs[-1]].index
@@ -1125,25 +1129,29 @@ class Node:
             self.blockchain_leafs.append(block_obj.curr_block_hash)
             if not self.is_attacker:
                 self.cache_update(block_obj.curr_block_hash)
+            # This is very IMPORTANT
+            if len(self.private_chain) > 0:
+                deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - \
+                                     (self.blocks_all[self.blockchain_leafs[-1]].index - 1)
 
-        if self.is_attacker:
+        if self.is_attacker and block_obj_extends_current_chain:
             to_start_new_mining = False
             # If the honest public chain takes the lead, the attacker will start mining on the new public chain
-            if deltaPrivatePublic <= 0:
+            if deltaPrivatePublic <= 0:  # After receiving the block, there is transition from lead of 0 to 0 or -ve
                 if len(self.private_chain) > 0:
                     self.change_mining_to_public_branch()
                     self.cache_update(block_obj.curr_block_hash)
                     self.private_chain.clear()
                 self.last_change_branch_time = self.simulator.get_global_time()
                 to_start_new_mining = True
-            elif deltaPrivatePublic == 1:
+            elif deltaPrivatePublic == 1:  # After receiving the block, there is transition from lead of 1 to 0
                 # TODO: we have to broadcast all privately mined blocks till "last_block_private_chain_hash"
                 # Both the public and the private chain are of equal length, so the attacker node will try out it's luck
                 last_block_private_chain_hash = self.private_chain[-1]
                 for node in self.neighbors.values():
                     self.block_send(self.blocks_all[last_block_private_chain_hash], node)
                 self.blockchain_leafs[-1] = last_block_private_chain_hash
-            elif deltaPrivatePublic == 2:
+            elif deltaPrivatePublic == 2:  # After receiving the block, there is transition from lead of 2 to 0
                 '''
                 Honest miners close down the attacker's lead to 1, so if the attacker is selfish, it will
                 publish the entire private chain. If the attacker is stubborn, it will reveal only the next
@@ -1169,7 +1177,7 @@ class Node:
                     self.private_chain = self.private_chain[1:]
                 else:
                     g_logger.error(f'FIXME: Invalid attacker node type encountered!')
-            elif len(self.private_chain) > 0:
+            elif len(self.private_chain) > 0:  # After receiving the block, there is transition from lead of >=3 to >=2
                 # The attacker's lead is above 2, so attacker will broadcast
                 # the first unpublished block in it's private chain
                 first_unpublished_block_private_chain = self.private_chain[0]
@@ -1177,31 +1185,6 @@ class Node:
                     self.block_send(self.blocks_all[first_unpublished_block_private_chain], node)
                 self.blockchain_leafs[-1] = first_unpublished_block_private_chain
                 self.private_chain = self.private_chain[1:]
-
-        # TODO: see if this is required or not
-        # Insert the block_obj into self.blockchain_leafs
-        # idx_insert = 0
-        # for i in range(len(self.blockchain_leafs) - 1, -1, -1):  # "i" goes from "N-1" to "0"
-        #     # NOTE: Mostly, the less than condition will never be true in our simulation
-        #     #       However, it can be true in real life
-        #     if block_obj.index <= self.blocks_all[self.blockchain_leafs[i]].index:
-        #         continue
-        #     idx_insert = i + 1
-        #     break
-        # self.blockchain_leafs.insert(idx_insert, block_obj.curr_block_hash)
-
-        # TODO: This can be removed if all manipulations on "self.blockchain_leafs" are correctly implemented
-        # for block in self.blocks_all.values():
-        #     try:
-        #         self.blockchain_leafs.remove(block.prev_block_hash)
-        #         g_logger.warning(f'')
-        #     except ValueError:
-        #         pass
-        # blockchain_leafs_new = sorted(self.blockchain_leafs, key=lambda x: self.blocks_all[x].index)
-        # if self.blockchain_leafs != blockchain_leafs_new:
-        #     g_logger.warning(f'Problem: Blockchain leaf inserting logic not working properly')
-        #     g_logger.warning(f'{self.blockchain_leafs=}')
-        #     g_logger.warning(f'{blockchain_leafs_new}')
 
         if to_start_new_mining:
             # if block_obj.curr_block_hash not in self.blockchain_leafs:
@@ -1796,6 +1779,22 @@ def simulation_analysis(mySimulator: Simulator) -> None:
             ratio4_val
         ))
 
+    for node in mySimulator.nodes_list:
+        if not node.is_attacker:
+            continue
+        print('\nNode id = {node.node_id}')
+        # Points to the last block of the longest blockchain known to "node.node_id"
+        block = node.blocks_all[node.blockchain_leafs[-1]]
+        # Total blocks in the longest blockchain known to "node.node_id" which are mined by the node itself
+        node_blocks_in_longest_chain = 0
+        while block.index != 0:
+            # First transaction of each block if Mining Reward transaction
+            # where the receiver is the miner of the block
+            if block.transactions[0].id_receiver == node.node_id:
+                node_blocks_in_longest_chain += 1
+            block = node.blocks_all[block.prev_block_hash]
+        print(f'MiningPowerUtilization_node_adv = {node_blocks_in_longest_chain / node.block_generation_count}')
+
     print('\n---Each Node Stats Arrays---')
     print('\nHash Power of Each Node =', [node.node_hash_power_percent for node in mySimulator.nodes_list])
     print('\nRatio 1 (node_blocks_in_longest_chain / node.block_generation_count) =', [i[0] for i in node_ratios])
@@ -1811,7 +1810,7 @@ def simulation_analysis(mySimulator: Simulator) -> None:
     network_total_blocks_mined: int = sum([
         node.block_generation_count for node in mySimulator.nodes_list
     ])
-    print(f'Ratio (blocks in longest chain / total blocks mined) = '
+    print(f'MPU_node_overall = Ratio (blocks in longest chain / total blocks mined) = '
           f'{network_longest_blockchain_length} / {network_total_blocks_mined} = '
           f'{network_longest_blockchain_length / network_total_blocks_mined}')
     pass
