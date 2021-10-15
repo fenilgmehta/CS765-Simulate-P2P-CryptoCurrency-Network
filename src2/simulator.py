@@ -269,7 +269,8 @@ class Simulator:
         ]
 
         # Adding individual attacker nodes to the nodes_list
-        for a_i in range(self.simulator_parameters.number_of_individual_attacker_nodes):
+        for _ in range(self.simulator_parameters.number_of_individual_attacker_nodes):
+            # According to Assignment-2 problem statement PDF, attacker nodes are always fast
             self.nodes_list.append(
                 Node(
                     len(self.nodes_list), self, self.simulator_parameters.individual_attacker_node_CPU_power_of_total,
@@ -341,6 +342,7 @@ class Simulator:
 
         # Creating the barabasi albert graph for 'n_honest' nodes, connecting
         # the honest nodes according to power law degree distribution
+        # NOTE: nodes with node_id [0, n_honest-1] are honest nodes
         g: nx.classes.graph.Graph = nx.barabasi_albert_graph(
             n_honest,
             random.randint(1, 10 if n_honest > 10 else max(1, n_honest - 1))
@@ -406,6 +408,7 @@ class Simulator:
                                                                adj_mat[temp_neighbor_id][attacker_node_id], c_ij)
                 self.nodes_list[attacker_node_id].add_new_peer(temp_neighbor_id,
                                                                adj_mat[attacker_node_id][temp_neighbor_id], c_ij)
+                # "g" is an undirected graph
                 g.add_edge(attacker_node_id, temp_neighbor_id)
 
         nx.draw(g, with_labels=True)
@@ -579,13 +582,15 @@ class Node:
         self.is_network_fast: bool = is_network_fast
         self.is_infected: bool = is_infected
         self.is_attacker: bool = is_attacker
-        self.last_change_branch_time: float = -1.0
+
         # Number of successfully mined blocks (the mined block may/may not be in the longest chain)
         self.block_generation_count: int = 0
         # Dictionary of connected peers
         self.neighbors: Dict[int, Node.NodeSiblingInfo] = dict()
         # The time at which a new block with chain length > local chain length is received
         self.last_receive_time: float = -1.0
+        # The time at which branch was changed from attackers Private branch to Honest miners branch
+        self.last_change_branch_time: float = -1.0
 
         self.txn_all: Dict[str, Transaction] = dict()  # Hash -> Transaction
         self.txn_pool: List[Transaction] = list()
@@ -596,7 +601,7 @@ class Node:
         self.blockchain_leafs: List[str] = [GENESIS_BLOCK.curr_block_hash]  # NOTE: this is always sorted
 
         # The attacker maintains a private chain
-        self.private_chain: List[str] = []
+        self.private_chain: List[str] = list()
 
         self.cache_balance: Dict[str, Dict] = defaultdict(defaultdict_float)
         self.node_hash_power_percent: float = hash_power_percent  # Range [0, 100] %
@@ -608,7 +613,7 @@ class Node:
         t_lambda = hash_power_percent * t_meanTk / 100
         # TODO: Which among the below two lines is correct ?
         # self.T_k_exp_block_mining_mean = numpy.random.exponential() / t_lambda
-        self.T_k_exp_block_mining_mean = 1.0 / t_lambda
+        self.T_k_exp_block_mining_mean = 1.0 / t_lambda  # 1 * T_k_block_avg_mining_time_sec * 100 / hash_power_percent
 
         # This is same for all nodes
         # Point 2 of Assignment-1 PDF: Exponential Distribution Mean for inter-arrival time between transaction
@@ -729,6 +734,7 @@ class Node:
     def change_mining_to_public_branch(self) -> None:
         global g_logger
 
+        # NOTE: only the below two line differ from "change_mining_branch"
         block_tail_hash_old = self.private_chain[-1]
         block_tail_hash_new = self.blockchain_leafs[-1]
         # if block_tail_hash_old == self.blocks_all[block_tail_hash_new].prev_block_hash:
@@ -1059,7 +1065,7 @@ class Node:
         # Store the block and forward it to others
         self.blocks_all[block_obj.curr_block_hash] = block_obj
 
-        # An attacker node won't forward the block mined by honest nodes
+        # An attacker node will not forward the blocks mined by any other node
         if not self.is_attacker:
             m_block_send_all_except(block_obj, senders_id)
 
@@ -1102,8 +1108,8 @@ class Node:
         # Difference between the length of the private chain and the public chain
         deltaPrivatePublic = 0
         if len(self.private_chain) > 0:
-            deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - self.blocks_all[
-                self.blockchain_leafs[-1]].index
+            deltaPrivatePublic = self.blocks_all[self.private_chain[-1]].index - \
+                                 self.blocks_all[self.blockchain_leafs[-1]].index
 
         to_start_new_mining = False
         if block_obj.index > self.blocks_all[self.blockchain_leafs[-1]].index:
@@ -1111,9 +1117,10 @@ class Node:
             self.last_receive_time = current_time
             g_logger.info(f'{self.node_id=}, Changing mining branch, '
                           f'new={block_obj.curr_block_hash}, current={self.blockchain_leafs[-1]}')
-            # Attacker will continue keep mining privately until the honest chain wins
+            # Attacker will continue mining privately until the honest chain wins
             if not self.is_attacker:
                 self.change_mining_branch(block_obj.curr_block_hash)
+            # TODO: verify if this is to be executed by both attacker and honest nodes or not
             # Insert the block_obj into self.blockchain_leafs
             self.blockchain_leafs.append(block_obj.curr_block_hash)
             if not self.is_attacker:
@@ -1126,10 +1133,11 @@ class Node:
                 if len(self.private_chain) > 0:
                     self.change_mining_to_public_branch()
                     self.cache_update(block_obj.curr_block_hash)
+                    self.private_chain.clear()
                 self.last_change_branch_time = self.simulator.get_global_time()
-                self.private_chain = []
                 to_start_new_mining = True
             elif deltaPrivatePublic == 1:
+                # TODO: we have to broadcast all privately mined blocks till "last_block_private_chain_hash"
                 # Both the public and the private chain are of equal length, so the attacker node will try out it's luck
                 last_block_private_chain_hash = self.private_chain[-1]
                 for node in self.neighbors.values():
@@ -1141,26 +1149,29 @@ class Node:
                 publish the entire private chain. If the attacker is stubborn, it will reveal only the next
                 block on it's private chain only to match the length of the public chain.
                 '''
+                # TODO: Can create a new data member for the class "Node" which denotes
+                #       the attackers type. This can allow us to simulate multiple types
+                #       of attackers at the same time.
                 attacker_node_type = self.simulator.simulator_parameters.attacker_node_type
 
-                if attacker_node_type == "selfish":
+                if attacker_node_type == 'selfish':
                     for private_blk_hash in self.private_chain:
                         private_blk = self.blocks_all[private_blk_hash]
                         for node in self.neighbors.values():
                             self.block_send(private_blk, node)
                     self.blockchain_leafs[-1] = self.private_chain[-1]
-                    self.private_chain = []
-                elif attacker_node_type == "stubborn":
+                    self.private_chain.clear()
+                elif attacker_node_type == 'stubborn':
                     first_unpublished_block_private_chain = self.private_chain[0]
                     for node in self.neighbors.values():
                         self.block_send(self.blocks_all[first_unpublished_block_private_chain], node)
                     self.blockchain_leafs[-1] = first_unpublished_block_private_chain
                     self.private_chain = self.private_chain[1:]
                 else:
-                    g_logger.error(f'Invalid attacker node type!')
-
+                    g_logger.error(f'FIXME: Invalid attacker node type encountered!')
             elif len(self.private_chain) > 0:
-                # The attacker's lead is above 2, so attacker will broadcast the first unpublished block in it's private chain
+                # The attacker's lead is above 2, so attacker will broadcast
+                # the first unpublished block in it's private chain
                 first_unpublished_block_private_chain = self.private_chain[0]
                 for node in self.neighbors.values():
                     self.block_send(self.blocks_all[first_unpublished_block_private_chain], node)
@@ -1223,7 +1234,7 @@ class Node:
 
         # If the private chain is empty, the attacker will mine on the latest block of the longest
         # public chain. Otherwise, it will mine on the latest block of it's private chain
-        if (self.is_attacker) and len(self.private_chain) != 0:
+        if self.is_attacker and len(self.private_chain) > 0:
             curr_tail = self.private_chain[-1]
 
         sp: SimulatorParameters = self.simulator.simulator_parameters
@@ -1301,7 +1312,7 @@ class Node:
         # A "Block" which created new longest blockchain was received after the
         # mining started. Hence, we discard this mining complete request because
         # in real life this mining work is to be discarded.
-        if not self.is_attacker:
+        if not self.is_attacker:  # Honest Node
             if block.creation_time < self.last_receive_time:
                 # This mining result is to be discarded because we received a new block which makes
                 # a longer blockchain after the mining started and before it ended.
@@ -1325,8 +1336,7 @@ class Node:
                 g_logger.warning(f'Problem: node_id={self.node_id}, '
                                  f'len queue = {self.blocks_all[self.blockchain_leafs[-1]].index=}, '
                                  f'len mined = {self.blocks_all[block.curr_block_hash].index=}')
-        # The attacker node is not concerned about the public blockchain until the time is right
-        else:
+        else:  # The attacker node is not concerned about the public blockchain until the time is right
             if block.creation_time < self.last_change_branch_time:
                 g_logger.info(
                     f'Node Id = {self.node_id}, Mining start time = {block.creation_time:0.5f}, '
@@ -1362,7 +1372,7 @@ class Node:
                         self.block_send(private_blk, node)
                 # Reset the private chain to empty list
                 self.blockchain_leafs[-1] = self.private_chain[-1]
-                self.private_chain = []
+                self.private_chain.clear()
 
         # Remove processed transactions from the transaction pool
         # NOTE: we use [1:] because mining reward transaction will not be in the "self.txn_pool"
@@ -1709,9 +1719,9 @@ def simulation_analysis(mySimulator: Simulator) -> None:
         node.blocks_all[node.blockchain_leafs[-1]].index for node in mySimulator.nodes_list
     ])
 
-    print('---Each Node Stats---')
     # Ratio 1,2,4
     node_ratios: List[Tuple[float, float, float]] = list()
+    print('---Each Node Stats---')
     for node in mySimulator.nodes_list:
         print('\nNode id = {node.node_id}')
         # total_blocks = len(node.blocks_all)
@@ -1722,7 +1732,7 @@ def simulation_analysis(mySimulator: Simulator) -> None:
         # # Total blocks in the longest blockchain known to "node.node_id"
         # len_longest_chain = block.index + 1
 
-        # Total blocks in the longest blockchain known to "node.node_id" which are mined it
+        # Total blocks in the longest blockchain known to "node.node_id" which are mined by the node itself
         node_blocks_in_longest_chain = 0
 
         while block.index != 0:
@@ -1732,7 +1742,7 @@ def simulation_analysis(mySimulator: Simulator) -> None:
                 node_blocks_in_longest_chain += 1
             block = node.blocks_all[block.prev_block_hash]
 
-        print(f'Node hashing power = {node.node_hash_power_percent} %')
+        print(f'Node hashing power = {node.node_hash_power_percent:.2f} %')
 
         if node.is_attacker:
             print('Attacker', end=',')
@@ -1923,15 +1933,21 @@ def Main(args: Dict):
     win.progress_label = 'Executing...'
     gui_lock.release()
     last_progress: float = 0.0
+    update_progress_i: int = -1
+    update_progress_every_n_events: int = 20
     start_time: float = time.time()  # Time in seconds
     while mySimulator.get_global_time() <= sp.execution_time:
         # g_logger.debug(f'{mySimulator.get_global_time()=}')
-        win.progress_percent = mySimulator.get_global_time() / sp.execution_time
-        if win.progress_percent - last_progress > 0.0001:  # 0.01 / 100
-            last_progress = win.progress_percent
-            win.progress_label = (f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
-                                  f'{seconds_to_minsec(time.time() - start_time)}<'
-                                  f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
+        update_progress_i = (update_progress_i + 1) % update_progress_every_n_events
+        if update_progress_i == 0:
+            gui_lock.acquire()
+            win.progress_percent = mySimulator.get_global_time() / sp.execution_time
+            if win.progress_percent - last_progress > 0.0001:  # 0.01 / 100
+                last_progress = win.progress_percent
+                win.progress_label = (f'Executing ({mySimulator.get_global_time():.1f} of {sp.execution_time}, '
+                                      f'{seconds_to_minsec(time.time() - start_time)}<'
+                                      f'{seconds_to_minsec((time.time() - start_time) / win.progress_percent)})')
+            gui_lock.release()
         status = mySimulator.execute_next_event()
         if status == False:
             g_logger.info('No events present in the event queue. Exiting...')
